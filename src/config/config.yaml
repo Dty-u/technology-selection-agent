@@ -1,0 +1,62 @@
+# Non-sensitive runtime configuration.
+llm:
+  model: deepseek-v4-flash
+  temperature: 0.5
+  base_url: https://api.deepseek.com
+
+embedding:
+  zhipu_model: embedding-3
+  zhipu_base_url: https://open.bigmodel.cn/api/paas/v4/
+  bge_model: BAAI/bge-small-en-v1.5
+  device: cpu
+
+milvus:
+  uri: http://127.0.0.1:19530
+  collection_name: adaptive_rag_c1
+
+neo4j:
+  uri: bolt://localhost:7687
+  username: neo4j
+
+retriever:
+  k: 4
+
+graph_retriever:
+  max_hops: 2
+  seed_limit: 5
+  path_limit: 20
+  max_documents: 4
+
+web_search:
+  max_results: 5
+  search_engine: search_pro
+  max_attempts: 2
+
+document:
+  chunk_length_threshold: 5000
+
+report:
+  output_dir: runtime/reports
+
+workflow:
+  max_transform_count: 2
+  max_generation_attempts: 2
+
+selection:
+  max_candidates: 3
+  max_evidence_rounds: 3
+  max_evidence_task_concurrency: 2
+  web_search_max_results: 8
+  web_search_engine: search_pro
+  max_review_rounds: 2
+  strict_cache_enabled: true
+  strict_cache_max_entries: 128
+  strict_cache_ttl_seconds: 900
+  retrieval_cache_ttl_seconds: 120
+  evidence_card_max_characters: 800
+  evidence_assessment_batch_size: 4
+  max_evidence_assessment_concurrency: 2
+  evidence_assessment_single_batch_limit: 7
+  decision_evidence_card_max_characters: 400
+  max_decision_evidence_cards_per_criterion: 2
+  relevance_document_max_characters: 400
