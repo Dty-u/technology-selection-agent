@@ -18,6 +18,9 @@ def decide_to_generate(state):
     transform_count = state.get("transform_count", 0)
 
     if not filtered_documents:  # 如果没有相关文档
+        if state.get("vector_error") and state.get("graph_error"):
+            log.info("---本地检索器均不可用，直接转为 Web 检索---")
+            return "web_search"
         if transform_count >= MAX_TRANSFORM_COUNT:
             log.info(f"---决策：所有文档都与问题无关,并且已经循环了{MAX_TRANSFORM_COUNT}次，转为web查询问题---")
             return "web_search"  # 返回问题优化节点

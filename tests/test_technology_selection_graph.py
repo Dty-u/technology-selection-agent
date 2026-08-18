@@ -384,9 +384,11 @@ class RequirementAndCandidateNodeTest(unittest.TestCase):
         self.assertEqual(chain.invoke.call_count, 2)
 
     def test_clarify_requirements_returns_at_most_three_questions(self):
-        from src.workflows.nodes.selection_requirements import clarify_requirements
+        from src.workflows.nodes.selection_requirements import (
+            _build_clarification_questions,
+        )
 
-        result = clarify_requirements(
+        result = _build_clarification_questions(
             {
                 "requirements": {
                     "business_goal": "",
@@ -402,9 +404,8 @@ class RequirementAndCandidateNodeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result["status"], "awaiting_user")
-        self.assertLessEqual(len(result["clarification_questions"]), 3)
-        self.assertTrue(result["clarification_questions"])
+        self.assertLessEqual(len(result), 3)
+        self.assertTrue(result)
 
     def test_generate_candidates_applies_configured_limit(self):
         import src.workflows.nodes.selection_requirements as requirements_module
@@ -3050,6 +3051,139 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertIn("| 推断 |", report)
         self.assertIn("来源未验证", report)
 
+    def test_report_includes_original_request_and_clarification_rounds(self):
+        from src.workflows.nodes.selection_decision import (
+            build_report_data,
+            generate_report,
+        )
+
+        state = {
+            "user_request": "帮我做半导体技术选型",
+            "clarification_answers": [
+                "应用于手机SoC，优先功耗",
+                "两年内量产",
+            ],
+            "clarification_history": [
+                {
+                    "questions": [
+                        "这次技术选型最希望解决的业务目标是什么？"
+                    ],
+                    "answer": "应用于手机SoC，优先功耗",
+                },
+                {
+                    "questions": [
+                        "该技术将用于什么产品、芯片或制造场景？",
+                        "是否有明确的成本或设备投入限制？",
+                    ],
+                    "answer": "两年内量产",
+                },
+            ],
+            "status": "completed",
+            "requirements": {
+                "business_goal": "降低功耗",
+                "application_scenario": "手机SoC",
+                "active_criteria": ["performance", "cost"],
+                "priorities": {
+                    "performance": 0.7,
+                    "cost": 0.3,
+                },
+                "hard_constraints": [],
+            },
+            "feasible_candidates": [
+                {"candidate_id": "finfet", "name": "FinFET", "summary": ""},
+                {"candidate_id": "gaa", "name": "GAA", "summary": ""},
+            ],
+            "excluded_candidates": [],
+            "evaluations": [
+                {
+                    "candidate_id": "finfet",
+                    "criterion_scores": [
+                        {
+                            "criterion": "performance",
+                            "score": 4,
+                            "rationale": "证据",
+                            "evidence_ids": ["E1"],
+                        }
+                    ],
+                    "weighted_score": None,
+                },
+                {
+                    "candidate_id": "gaa",
+                    "criterion_scores": [
+                        {
+                            "criterion": "performance",
+                            "score": 5,
+                            "rationale": "证据",
+                            "evidence_ids": ["E1"],
+                        }
+                    ],
+                    "weighted_score": None,
+                },
+            ],
+            "risk_items": [],
+            "recommendation": {
+                "decision": "conditional",
+                "recommended_candidate_id": "gaa",
+                "decision_basis": "scenario_criteria",
+                "rationale": ["低功耗潜力"],
+                "prerequisites": [],
+                "unresolved_items": [],
+            },
+            "evidence_records": [],
+            "warnings": [],
+        }
+
+        result = generate_report(state)
+        report_data = build_report_data(state)
+
+        self.assertIn("| 原始需求 | 帮我做半导体技术选型 |", result["report"])
+        self.assertIn("### 澄清记录", result["report"])
+        self.assertIn("第1轮问题：这次技术选型最希望解决的业务目标是什么？", result["report"])
+        self.assertIn("回答：应用于手机SoC，优先功耗", result["report"])
+        self.assertIn("第2轮问题：该技术将用于什么产品、芯片或制造场景？；是否有明确的成本或设备投入限制？", result["report"])
+        self.assertIn("回答：两年内量产", result["report"])
+        self.assertEqual(
+            report_data["conversation"]["user_request"],
+            "帮我做半导体技术选型",
+        )
+        self.assertEqual(
+            report_data["conversation"]["clarification_answers"],
+            ["应用于手机SoC，优先功耗", "两年内量产"],
+        )
+        self.assertEqual(
+            len(report_data["conversation"]["clarification_history"]),
+            2,
+        )
+
+    def test_report_without_clarification_shows_no_rounds(self):
+        from src.workflows.nodes.selection_decision import (
+            build_report_data,
+            generate_report,
+        )
+
+        state = {
+            "status": "completed",
+            "requirements": {
+                "business_goal": "降低功耗",
+                "application_scenario": "手机SoC",
+            },
+            "feasible_candidates": [
+                {"candidate_id": "gaa", "name": "GAA", "summary": ""}
+            ],
+            "excluded_candidates": [],
+            "evaluations": [],
+            "risk_items": [],
+            "recommendation": {"decision": "insufficient_evidence"},
+            "evidence_records": [],
+            "warnings": [],
+        }
+        result = generate_report(state)
+        self.assertIn("本轮未发起需求澄清。", result["report"])
+        self.assertEqual(
+            build_report_data(state)["conversation"]["clarification_answers"],
+            [],
+        )
+
     def test_report_marks_inactive_fixed_criteria_without_creating_gaps(self):
         from src.workflows.nodes.selection_decision import generate_report
 
@@ -4375,7 +4509,7 @@ class TechnologySelectionGraphStructureTest(unittest.TestCase):
             ("review_recommendation", "optimize_evidence_queries", True),
             ("review_recommendation", "generate_report", True),
             ("generate_report", "__end__", False),
-            ("clarify_requirements", "__end__", False),
+            ("clarify_requirements", "parse_requirements", False),
         }
         self.assertTrue(expected_edges.issubset(edges), edges)
 
@@ -4406,8 +4540,10 @@ class TechnologySelectionEndToEndTest(unittest.TestCase):
                 {"user_request": "我想降低功耗"}
             )
 
-        self.assertEqual(result["status"], "awaiting_user")
-        self.assertTrue(result["clarification_questions"])
+        self.assertIn("__interrupt__", result)
+        payload = result["__interrupt__"][0].value
+        self.assertEqual(payload["status"], "awaiting_user")
+        self.assertTrue(payload["clarification_questions"])
         self.assertNotIn("report", result)
 
     def test_complete_request_produces_source_linked_report_with_mocks(self):
@@ -4628,6 +4764,200 @@ class TechnologySelectionEndToEndTest(unittest.TestCase):
             "[证据任务][initial-technical] 开始：检索证据",
             rendered,
         )
+
+
+class TechnologySelectionInterruptTest(unittest.TestCase):
+    """Checkpointed technology-selection session with LangGraph interrupts."""
+
+    def _incomplete_payload(self, user_request, clarification_answers):
+        return {
+            "business_goal": "降低功耗",
+            "application_scenario": "",
+            "priorities": {},
+            "hard_constraints": [],
+            "requested_candidates": ["FinFET", "GAA"],
+            "scenario_criteria": [],
+            "missing_information": ["application_scenario"],
+        }
+
+    def _complete_payload(self, user_request, clarification_answers):
+        return {
+            "business_goal": "降低功耗",
+            "application_scenario": "移动芯片",
+            "priorities": {},
+            "hard_constraints": [],
+            "requested_candidates": ["FinFET", "GAA"],
+            "scenario_criteria": [],
+            "missing_information": [],
+        }
+
+    def _parse_chain(self, complete_payload=True):
+        import src.workflows.nodes.selection_requirements as requirements_module
+        from src.workflows.selection_cache import clear_selection_cache
+
+        clear_selection_cache()
+        chain = MagicMock()
+        chain.invoke.side_effect = lambda payload: AIMessage(
+            content=json.dumps(
+                (
+                    self._complete_payload(
+                        payload.get("user_request", ""),
+                        payload.get("clarification_answers", []),
+                    )
+                    if complete_payload
+                    else self._incomplete_payload(
+                        payload.get("user_request", ""),
+                        payload.get("clarification_answers", []),
+                    )
+                ),
+                ensure_ascii=False,
+            )
+        )
+        return requirements_module, chain
+
+    def test_first_incomplete_request_produces_interrupt_and_preserves_user_request(self):
+        import src.workflows.nodes.selection_requirements as requirements_module
+        from src.infrastructure.checkpointing.sqlite import open_sqlite_checkpointer
+        from src.workflows.technology_selection_graph import (
+            build_technology_selection_graph,
+        )
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        _, chain = self._parse_chain(complete_payload=False)
+        with TemporaryDirectory(dir=Path.cwd()) as directory:
+            database_path = Path(directory) / "cp.sqlite3"
+            with open_sqlite_checkpointer(database_path) as checkpointer:
+                graph = build_technology_selection_graph(checkpointer)
+                config = {"configurable": {"thread_id": "interrupt-t1"}}
+                with patch.object(
+                    requirements_module,
+                    "requirement_analysis_chain",
+                    chain,
+                ):
+                    result = graph.invoke(
+                        {"user_request": "我想降低功耗"},
+                        config=config,
+                    )
+                    self.assertEqual(
+                        graph.get_state(config).values["user_request"],
+                        "我想降低功耗",
+                    )
+
+        self.assertIn("__interrupt__", result)
+        payload = result["__interrupt__"][0].value
+        self.assertEqual(payload["status"], "awaiting_user")
+        self.assertTrue(payload["clarification_questions"])
+        self.assertLessEqual(len(payload["clarification_questions"]), 3)
+
+    def test_resume_reparses_with_original_request_and_latest_answer(self):
+        import src.workflows.nodes.selection_requirements as requirements_module
+        from src.infrastructure.checkpointing.sqlite import open_sqlite_checkpointer
+        from src.workflows.technology_selection_graph import (
+            build_technology_selection_graph,
+        )
+        from langgraph.types import Command
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        _, chain = self._parse_chain(complete_payload=False)
+        with TemporaryDirectory(dir=Path.cwd()) as directory:
+            database_path = Path(directory) / "cp.sqlite3"
+            with open_sqlite_checkpointer(database_path) as checkpointer:
+                graph = build_technology_selection_graph(checkpointer)
+                config = {"configurable": {"thread_id": "interrupt-t2"}}
+                with patch.object(
+                    requirements_module,
+                    "requirement_analysis_chain",
+                    chain,
+                ):
+                    graph.invoke(
+                        {"user_request": "为移动芯片比较FinFET和GAA"},
+                        config=config,
+                    )
+                    resumed = graph.invoke(
+                        Command(resume="应用于手机SoC，优先功耗"),
+                        config=config,
+                    )
+
+        self.assertIn("__interrupt__", resumed)
+        reparsed = chain.invoke.call_args_list[1].args[0]
+        self.assertEqual(reparsed["user_request"], "为移动芯片比较FinFET和GAA")
+        self.assertIn("应用于手机SoC，优先功耗", reparsed["clarification_answers"])
+
+    def test_answers_and_history_are_appended_exactly_once(self):
+        import src.workflows.nodes.selection_requirements as requirements_module
+        from src.infrastructure.checkpointing.sqlite import open_sqlite_checkpointer
+        from src.workflows.technology_selection_graph import (
+            build_technology_selection_graph,
+        )
+        from langgraph.types import Command
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        _, chain = self._parse_chain(complete_payload=False)
+        with TemporaryDirectory(dir=Path.cwd()) as directory:
+            database_path = Path(directory) / "cp.sqlite3"
+            with open_sqlite_checkpointer(database_path) as checkpointer:
+                graph = build_technology_selection_graph(checkpointer)
+                config = {"configurable": {"thread_id": "interrupt-t3"}}
+                with patch.object(
+                    requirements_module,
+                    "requirement_analysis_chain",
+                    chain,
+                ):
+                    graph.invoke(
+                        {"user_request": "比较FinFET和GAA"},
+                        config=config,
+                    )
+                    graph.invoke(
+                        Command(resume="应用于手机SoC"),
+                        config=config,
+                    )
+                    values = graph.get_state(config).values
+
+        self.assertEqual(values["clarification_answers"], ["应用于手机SoC"])
+        self.assertEqual(len(values["clarification_history"]), 1)
+        self.assertEqual(
+            values["clarification_history"][0]["answer"],
+            "应用于手机SoC",
+        )
+        self.assertTrue(values["clarification_history"][0]["questions"])
+
+    def test_incomplete_answer_enters_interrupt_again_without_duplication(self):
+        import src.workflows.nodes.selection_requirements as requirements_module
+        from src.infrastructure.checkpointing.sqlite import open_sqlite_checkpointer
+        from src.workflows.technology_selection_graph import (
+            build_technology_selection_graph,
+        )
+        from langgraph.types import Command
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        _, chain = self._parse_chain(complete_payload=False)
+        with TemporaryDirectory(dir=Path.cwd()) as directory:
+            database_path = Path(directory) / "cp.sqlite3"
+            with open_sqlite_checkpointer(database_path) as checkpointer:
+                graph = build_technology_selection_graph(checkpointer)
+                config = {"configurable": {"thread_id": "interrupt-t4"}}
+                with patch.object(
+                    requirements_module,
+                    "requirement_analysis_chain",
+                    chain,
+                ):
+                    graph.invoke(
+                        {"user_request": "比较FinFET和GAA"},
+                        config=config,
+                    )
+                    resumed = graph.invoke(
+                        Command(resume="回答仍不完整"),
+                        config=config,
+                    )
+                    values = graph.get_state(config).values
+
+        self.assertIn("__interrupt__", resumed)
+        self.assertEqual(values["clarification_answers"], ["回答仍不完整"])
+        self.assertEqual(len(values["clarification_history"]), 1)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
-from src.infrastructure.llm.chat_model import llm, selection_llm
+from src.infrastructure.llm.chat_model import selection_llm, utility_json_llm
 
 
 # 数据模型 - 文档相关性评分
@@ -18,7 +18,7 @@ class GradeDocuments(BaseModel):
 
 
 # 带函数调用的LLM初始化
-structured_llm_grader = llm | RunnableLambda(
+structured_llm_grader = utility_json_llm | RunnableLambda(
     lambda message: GradeDocuments.model_validate(
         json.loads(message.content.strip().removeprefix("```json").removesuffix("```").strip())
     )

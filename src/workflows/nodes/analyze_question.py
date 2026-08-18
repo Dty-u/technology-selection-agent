@@ -6,7 +6,11 @@ from typing import List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from src.infrastructure.llm.chat_model import llm, selection_llm
+from src.infrastructure.llm.chat_model import (
+    selection_json_llm,
+    selection_llm,
+    utility_json_llm,
+)
 from src.observability.logging import log
 
 ALLOWED_RELATION_TYPES = {
@@ -49,8 +53,9 @@ analysis_prompt = ChatPromptTemplate.from_messages(
         ("human", "{question}"),
     ]
 )
-question_analysis_chain = analysis_prompt | llm
-selection_question_analysis_chain = analysis_prompt | selection_llm
+question_analysis_llm = utility_json_llm
+question_analysis_chain = analysis_prompt | question_analysis_llm
+selection_question_analysis_chain = analysis_prompt | selection_json_llm
 
 
 retrieval_intent_prompt = ChatPromptTemplate.from_messages(
@@ -66,7 +71,7 @@ retrieval_intent_prompt = ChatPromptTemplate.from_messages(
         ("human", "{question}"),
     ]
 )
-retrieval_intent_chain = retrieval_intent_prompt | llm
+retrieval_intent_chain = retrieval_intent_prompt | utility_json_llm
 selection_retrieval_intent_chain = retrieval_intent_prompt | selection_llm
 
 
@@ -111,6 +116,20 @@ def parse_retrieval_intent(content: str) -> RetrievalIntent:
 
 def analyze_question(state):
     """Return route, graph entities, and relation intent from one model call."""
+    if state.get("analysis_ready"):
+        try:
+            return QuestionAnalysis.model_validate(
+                {
+                    "route": state.get("route"),
+                    "query_entities": state.get("query_entities", []),
+                    "relation_intent": state.get("relation_intent", ""),
+                    "relation_types": state.get("relation_types", []),
+                }
+            ).model_dump()
+        except (TypeError, ValueError):
+            log.warning(
+                "---预计算检索意图无效，回退到问题分析模型---"
+            )
     question = state["question"]
     log.info("---ANALYZE QUESTION---")
     chain = (
@@ -120,7 +139,14 @@ def analyze_question(state):
     )
     response = chain.invoke({"question": question})
     content = response.content if hasattr(response, "content") else str(response)
-    return parse_question_analysis(content).model_dump()
+    try:
+        return parse_question_analysis(content).model_dump()
+    except (TypeError, ValueError) as error:
+        log.warning(
+            "---问题分析未返回有效 JSON：错误类型={}，降级为本地混合检索---",
+            type(error).__name__,
+        )
+        return QuestionAnalysis(route="local_hybrid").model_dump()
 
 
 def extract_retrieval_intent(state):

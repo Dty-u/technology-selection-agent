@@ -33,3 +33,4 @@ Thumbs.db
 # Runtime-generated output
 runtime/logs/
 runtime/reports/
+runtime/checkpoints/

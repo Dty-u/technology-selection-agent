@@ -76,6 +76,29 @@ class QuestionAnalysisTest(unittest.TestCase):
             {"question": "How does GAA improve power?"}
         )
 
+    def test_analysis_node_falls_back_to_local_hybrid_for_non_json_model_reply(self):
+        import src.workflows.nodes.analyze_question as analysis_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content="芯片可按功能分为逻辑、存储、模拟和射频芯片。"
+        )
+
+        with patch.object(analysis_module, "question_analysis_chain", chain):
+            result = analysis_module.analyze_question(
+                {"question": "芯片分哪些种类？"}
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "route": "local_hybrid",
+                "query_entities": [],
+                "relation_intent": "",
+                "relation_types": [],
+            },
+        )
+
     def test_analysis_uses_fast_chain_only_for_technology_selection(self):
         import src.workflows.nodes.analyze_question as analysis_module
 
@@ -185,6 +208,7 @@ class RetrievalStateTest(unittest.TestCase):
             result,
             {
                 "vector_documents": expected_documents,
+                "vector_error": None,
                 "question": "What is GAA?",
             },
         )
@@ -335,21 +359,16 @@ class RetryGuardTest(unittest.TestCase):
     def test_answer_quality_is_checked_against_the_original_question(self):
         import src.workflows.routes.evaluate_generation as evaluation_module
 
-        supported = SimpleNamespace(binary_score="yes")
-        useful = SimpleNamespace(binary_score="yes")
-        hallucination_grader = MagicMock()
-        hallucination_grader.invoke.return_value = supported
-        answer_grader = MagicMock()
-        answer_grader.invoke.return_value = useful
+        assessment = MagicMock()
+        assessment.invoke.return_value = SimpleNamespace(
+            grounded="yes",
+            answers_question="yes",
+        )
 
         with patch.object(
             evaluation_module,
-            "hallucination_grader_chain",
-            hallucination_grader,
-        ), patch.object(
-            evaluation_module,
-            "answer_grader_chain",
-            answer_grader,
+            "generation_assessment_chain",
+            assessment,
         ):
             route = evaluation_module.grade_generation_v_documents_and_question(
                 {
@@ -361,8 +380,9 @@ class RetryGuardTest(unittest.TestCase):
             )
 
         self.assertEqual(route, "useful")
-        answer_grader.invoke.assert_called_once_with(
+        assessment.invoke.assert_called_once_with(
             {
+                "documents": [Document(page_content="evidence")],
                 "question": "半导体现在发展的速度快不快？",
                 "generation": "answer",
             }
@@ -371,11 +391,11 @@ class RetryGuardTest(unittest.TestCase):
     def test_accepted_generation_logs_evaluation_in_chinese(self):
         import src.workflows.routes.evaluate_generation as evaluation_module
 
-        yes_score = SimpleNamespace(binary_score="yes")
-        hallucination_grader = MagicMock()
-        hallucination_grader.invoke.return_value = yes_score
-        answer_grader = MagicMock()
-        answer_grader.invoke.return_value = yes_score
+        assessment = MagicMock()
+        assessment.invoke.return_value = SimpleNamespace(
+            grounded="yes",
+            answers_question="yes",
+        )
         messages = []
         sink_id = evaluation_module.log.add(
             lambda message: messages.append(str(message)),
@@ -385,12 +405,8 @@ class RetryGuardTest(unittest.TestCase):
         try:
             with patch.object(
                 evaluation_module,
-                "hallucination_grader_chain",
-                hallucination_grader,
-            ), patch.object(
-                evaluation_module,
-                "answer_grader_chain",
-                answer_grader,
+                "generation_assessment_chain",
+                assessment,
             ):
                 route = (
                     evaluation_module.grade_generation_v_documents_and_question(
@@ -465,13 +481,15 @@ class RetryGuardTest(unittest.TestCase):
     def test_unsupported_generation_retries_then_falls_back(self):
         import src.workflows.routes.evaluate_generation as evaluation_module
 
-        unsupported = SimpleNamespace(binary_score="no")
-        hallucination_grader = MagicMock()
-        hallucination_grader.invoke.return_value = unsupported
+        assessment = MagicMock()
+        assessment.invoke.return_value = SimpleNamespace(
+            grounded="no",
+            answers_question="no",
+        )
         with patch.object(
             evaluation_module,
-            "hallucination_grader_chain",
-            hallucination_grader,
+            "generation_assessment_chain",
+            assessment,
         ):
             retry_route = (
                 evaluation_module.grade_generation_v_documents_and_question(
@@ -514,59 +532,53 @@ class RetryGuardTest(unittest.TestCase):
     def test_not_useful_generation_rewrites_then_falls_back(self):
         import src.workflows.routes.evaluate_generation as evaluation_module
 
-        supported = SimpleNamespace(binary_score="yes")
-        not_useful = SimpleNamespace(binary_score="no")
-        hallucination_grader = MagicMock()
-        hallucination_grader.invoke.return_value = supported
-        answer_grader = MagicMock()
-        answer_grader.invoke.return_value = not_useful
+        assessment = MagicMock()
+        assessment.invoke.return_value = SimpleNamespace(
+            grounded="yes",
+            answers_question="no",
+        )
         with patch.object(
             evaluation_module,
-            "hallucination_grader_chain",
-            hallucination_grader,
+            "generation_assessment_chain",
+            assessment,
         ):
-            with patch.object(
-                evaluation_module,
-                "answer_grader_chain",
-                answer_grader,
-            ):
-                rewrite_route = (
-                    evaluation_module.grade_generation_v_documents_and_question(
-                        {
-                            "question": "What is GAA?",
-                            "documents": [Document(page_content="evidence")],
-                            "generation": "answer",
-                            "generation_attempt_count": 1,
-                            "transform_count": 0,
-                            "retrieval_source": "local_hybrid",
-                        }
-                    )
+            rewrite_route = (
+                evaluation_module.grade_generation_v_documents_and_question(
+                    {
+                        "question": "What is GAA?",
+                        "documents": [Document(page_content="evidence")],
+                        "generation": "answer",
+                        "generation_attempt_count": 1,
+                        "transform_count": 0,
+                        "retrieval_source": "local_hybrid",
+                    }
                 )
-                web_route = (
-                    evaluation_module.grade_generation_v_documents_and_question(
-                        {
-                            "question": "What is GAA?",
-                            "documents": [Document(page_content="evidence")],
-                            "generation": "answer",
-                            "generation_attempt_count": 1,
-                            "transform_count": 2,
-                            "retrieval_source": "local_hybrid",
-                        }
-                    )
+            )
+            web_route = (
+                evaluation_module.grade_generation_v_documents_and_question(
+                    {
+                        "question": "What is GAA?",
+                        "documents": [Document(page_content="evidence")],
+                        "generation": "answer",
+                        "generation_attempt_count": 1,
+                        "transform_count": 2,
+                        "retrieval_source": "local_hybrid",
+                    }
                 )
-                exhausted_route = (
-                    evaluation_module.grade_generation_v_documents_and_question(
-                        {
-                            "question": "What is GAA?",
-                            "documents": [Document(page_content="web evidence")],
-                            "generation": "answer",
-                            "generation_attempt_count": 1,
-                            "transform_count": 2,
-                            "retrieval_source": "web_search",
-                            "web_search_attempt_count": 2,
-                        }
-                    )
+            )
+            exhausted_route = (
+                evaluation_module.grade_generation_v_documents_and_question(
+                    {
+                        "question": "What is GAA?",
+                        "documents": [Document(page_content="web evidence")],
+                        "generation": "answer",
+                        "generation_attempt_count": 1,
+                        "transform_count": 2,
+                        "retrieval_source": "web_search",
+                        "web_search_attempt_count": 2,
+                    }
                 )
+            )
 
         self.assertEqual(rewrite_route, "transform_query")
         self.assertEqual(web_route, "web_search")
@@ -581,7 +593,10 @@ class RetryGuardTest(unittest.TestCase):
         ) as hallucination_grader, patch.object(
             evaluation_module,
             "answer_grader_chain",
-        ) as answer_grader:
+        ) as answer_grader, patch.object(
+            evaluation_module,
+            "generation_assessment_chain",
+        ) as assessment:
             route = evaluation_module.grade_generation_v_documents_and_question(
                 {
                     "question": "目前GAA技术的量产进展如何？",
@@ -592,6 +607,7 @@ class RetryGuardTest(unittest.TestCase):
             )
 
         self.assertEqual(route, "end")
+        assessment.invoke.assert_not_called()
         hallucination_grader.invoke.assert_not_called()
         answer_grader.invoke.assert_not_called()
 

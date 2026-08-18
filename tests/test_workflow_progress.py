@@ -105,6 +105,31 @@ class WorkflowProgressTest(unittest.TestCase):
         self.assertIn("异常类型=RuntimeError", rendered)
         self.assertNotIn("private provider response", rendered)
 
+    def test_logged_node_reports_graph_interrupt_as_a_pause_not_a_failure(self):
+        from langgraph.errors import GraphInterrupt
+
+        logged_node = _load_progress_api(self)
+        messages = self._capture_messages()
+
+        def pausing_node(_state):
+            raise GraphInterrupt("awaiting user")
+
+        wrapped = logged_node(
+            "技术选型",
+            "pausing_node",
+            "等待用户回答",
+            pausing_node,
+            heartbeat_seconds=None,
+        )
+        with self.assertRaises(GraphInterrupt):
+            wrapped({})
+        rendered = "\n".join(str(message) for message in messages)
+
+        self.assertIn("[技术选型][pausing_node] 暂停：等待用户回答", rendered)
+        self.assertIn("等待用户输入/暂停", rendered)
+        self.assertNotIn("[技术选型][pausing_node] 失败", rendered)
+        self.assertNotIn("异常类型=GraphInterrupt", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

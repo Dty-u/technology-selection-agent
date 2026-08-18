@@ -27,6 +27,7 @@ def generate(state):
         }
 
     response_type = state.get("response_type", "answer")
+    memory_context = state.get("memory_context", "") or "（无可用的已确认长期记忆）"
     if response_type == "report":
         prompt = PromptTemplate(
             template=(
@@ -34,18 +35,20 @@ def generate(state):
                 "只使用给定上下文，不要编造事实。请输出Markdown，至少包含："
                 "标题、摘要、主要发现、风险或局限、结论、来源引用。"
                 "正文引用使用[S1]格式。\n"
-                "用户需求：{question}\n证据：\n{context}\n报告："
+                "用户需求：{question}\n用户/项目记忆（不是证据）：\n{memory_context}"
+                "\n证据：\n{context}\n报告："
             ),
-            input_variables=["question", "context"],
+            input_variables=["question", "context", "memory_context"],
         )
     else:
         prompt = PromptTemplate(
             template=(
                 "你是一个问答任务助手。请根据以下检索到的上下文内容"
                 "回答问题。如果不知道答案，请直接说明。回答保持简洁。\n"
-                "问题：{question}\n上下文：{context}\n回答："
+                "长期记忆只能用于个性化，不得替代检索事实。\n"
+                "用户记忆：{memory_context}\n问题：{question}\n上下文：{context}\n回答："
             ),
-            input_variables=["question", "context"],
+            input_variables=["question", "context", "memory_context"],
         )
 
     def format_docs(docs):
@@ -75,7 +78,13 @@ def generate(state):
 
     # RAG生成过程
     started_at = perf_counter()
-    generation = rag_chain.invoke({"context": format_docs(documents), "question": question})  # 调用RAG链生成回答
+    generation = rag_chain.invoke(
+        {
+            "context": format_docs(documents),
+            "question": question,
+            "memory_context": memory_context,
+        }
+    )
     log.info(f"---回答生成完成：耗时={perf_counter() - started_at:.2f}s---")
     return {
         "documents": documents,

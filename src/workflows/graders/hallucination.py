@@ -2,7 +2,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from pydantic import Field, BaseModel
 
-from src.infrastructure.llm.chat_model import llm
+from src.infrastructure.llm.chat_model import utility_llm
 
 
 # 数据模型 - 生成内容幻觉评分
@@ -15,7 +15,7 @@ class GradeHallucinations(BaseModel):
 
 
 # 带函数调用的LLM初始化
-structured_llm_grader = llm | RunnableLambda(
+structured_llm_grader = utility_llm | RunnableLambda(
     lambda message: GradeHallucinations(binary_score=message.content.strip().lower())
 )
 

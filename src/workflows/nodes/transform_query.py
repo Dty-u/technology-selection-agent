@@ -1,7 +1,7 @@
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from src.infrastructure.llm.chat_model import llm
+from src.infrastructure.llm.chat_model import utility_llm
 from src.observability.logging import log
 
 
@@ -18,7 +18,7 @@ rewrite_prompt = ChatPromptTemplate.from_messages(
         ),
     ]
 )
-question_rewriter_chain = rewrite_prompt | llm | StrOutputParser()
+question_rewriter_chain = rewrite_prompt | utility_llm | StrOutputParser()
 
 
 def transform_query(state):

@@ -24,6 +24,10 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 LLM_MODEL = _CONFIG["llm"]["model"]
 LLM_TEMPERATURE = _CONFIG["llm"]["temperature"]
 LLM_BASE_URL = _CONFIG["llm"]["base_url"]
+LLM_REQUEST_TIMEOUT_SECONDS = _CONFIG["llm"]["request_timeout_seconds"]
+LLM_MAX_RETRIES = _CONFIG["llm"]["max_retries"]
+UTILITY_LLM_TIMEOUT_SECONDS = _CONFIG["llm"]["utility_timeout_seconds"]
+UTILITY_LLM_MAX_RETRIES = _CONFIG["llm"]["utility_max_retries"]
 
 ZHIPU_EMBEDDING_MODEL = _CONFIG["embedding"]["zhipu_model"]
 ZHIPU_EMBEDDING_BASE_URL = _CONFIG["embedding"]["zhipu_base_url"]
@@ -46,9 +50,28 @@ GRAPH_MAX_DOCUMENTS = _CONFIG["graph_retriever"]["max_documents"]
 WEB_SEARCH_MAX_RESULTS = _CONFIG["web_search"]["max_results"]
 WEB_SEARCH_ENGINE = _CONFIG["web_search"]["search_engine"]
 WEB_SEARCH_MAX_ATTEMPTS = _CONFIG["web_search"]["max_attempts"]
+WEB_SEARCH_TIMEOUT_SECONDS = _CONFIG["web_search"]["request_timeout_seconds"]
 
 DOCUMENT_CHUNK_LENGTH_THRESHOLD = _CONFIG["document"]["chunk_length_threshold"]
 REPORT_OUTPUT_DIR = _PROJECT_ROOT / _CONFIG["report"]["output_dir"]
+CHECKPOINT_BACKEND = os.getenv(
+    "CHECKPOINT_BACKEND",
+    _CONFIG["checkpoint"]["backend"],
+).strip().casefold()
+CHECKPOINT_DB_PATH = (
+    _PROJECT_ROOT / _CONFIG["checkpoint"]["sqlite_archive_path"]
+)
+CHECKPOINT_SETUP_ON_START = bool(_CONFIG["checkpoint"]["setup_on_start"])
+MYSQL_CHECKPOINT_URI = os.getenv("MYSQL_CHECKPOINT_URI", "").strip()
+MYSQL_MEMORY_URI = os.getenv("MYSQL_MEMORY_URI", "").strip()
+
+MEMORY_ENABLED = bool(_CONFIG["memory"]["enabled"])
+MEMORY_COLLECTION_NAME = _CONFIG["memory"]["milvus_collection_name"]
+SHORT_TERM_TURN_LIMIT = _CONFIG["memory"]["short_term_turn_limit"]
+MEMORY_EXACT_RECALL_LIMIT = _CONFIG["memory"]["exact_recall_limit"]
+MEMORY_SEMANTIC_RECALL_LIMIT = _CONFIG["memory"]["semantic_recall_limit"]
+MEMORY_HISTORICAL_CASE_LIMIT = _CONFIG["memory"]["historical_case_limit"]
+MEMORY_OUTBOX_MAX_ATTEMPTS = _CONFIG["memory"]["outbox_max_attempts"]
 
 MAX_TRANSFORM_COUNT = _CONFIG["workflow"]["max_transform_count"]
 MAX_GENERATION_ATTEMPTS = _CONFIG["workflow"]["max_generation_attempts"]
@@ -95,4 +118,9 @@ MAX_DECISION_EVIDENCE_CARDS_PER_CRITERION = _CONFIG["selection"][
 ]
 SELECTION_RELEVANCE_DOCUMENT_MAX_CHARACTERS = _CONFIG["selection"][
     "relevance_document_max_characters"
+]
+
+WARMUP_ON_START = bool(_CONFIG["performance"]["warmup_on_start"])
+RESOURCE_FAILURE_COOLDOWN_SECONDS = _CONFIG["performance"][
+    "resource_failure_cooldown_seconds"
 ]

@@ -5,6 +5,8 @@ langchain-openai==1.4.1
 langchain-experimental==0.4.2
 langchain-huggingface[full]==1.2.2
 langgraph==1.2.9
+langgraph-checkpoint-sqlite==3.1.1
+langgraph-checkpoint-mysql[pymysql]==3.0.0
 langchain-milvus==0.3.3
 langchain-neo4j==0.10.0
 neo4j==6.0.3
@@ -14,6 +16,7 @@ grpcio-status==1.67.1
 unstructured[md]==0.24.1
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 pydantic==2.13.4
+fastapi[standard]==0.141.1
 python-dotenv==1.2.2
 PyYAML==6.0.3
 loguru==0.7.3

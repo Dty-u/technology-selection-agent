@@ -3,6 +3,10 @@ llm:
   model: deepseek-v4-flash
   temperature: 0.5
   base_url: https://api.deepseek.com
+  request_timeout_seconds: 60
+  max_retries: 1
+  utility_timeout_seconds: 20
+  utility_max_retries: 1
 
 embedding:
   zhipu_model: embedding-3
@@ -31,12 +35,27 @@ web_search:
   max_results: 5
   search_engine: search_pro
   max_attempts: 2
+  request_timeout_seconds: 15
 
 document:
   chunk_length_threshold: 5000
 
 report:
   output_dir: runtime/reports
+
+checkpoint:
+  backend: mysql
+  sqlite_archive_path: runtime/checkpoints/workflow.sqlite3
+  setup_on_start: false
+
+memory:
+  enabled: true
+  milvus_collection_name: rag_agent_memory_v1
+  short_term_turn_limit: 6
+  exact_recall_limit: 8
+  semantic_recall_limit: 5
+  historical_case_limit: 2
+  outbox_max_attempts: 8
 
 workflow:
   max_transform_count: 2
@@ -60,3 +79,7 @@ selection:
   decision_evidence_card_max_characters: 400
   max_decision_evidence_cards_per_criterion: 2
   relevance_document_max_characters: 400
+
+performance:
+  warmup_on_start: true
+  resource_failure_cooldown_seconds: 30

@@ -22,15 +22,38 @@ Run test files in separate Python processes; combined discovery can reload Windo
 
 ## Workflow Entry Points
 
-Use `src.workflows.query_router_graph.query_router_graph` as the recommended
-application entry point. It accepts one `query` and routes the request to either
-ordinary RAG question answering or semiconductor technology selection:
+Use `src.workflows.application.open_memory_application` as the production
+entry point. It injects the MySQL checkpointer, authoritative memory repository,
+and direct Milvus semantic-memory reader. Every invocation must provide explicit
+`user_id`, `thread_id`, and a new `request_id`; technology selection also requires
+`project_id`:
 
 ```python
-from src.workflows.query_router_graph import query_router_graph
+from uuid import uuid4
 
-result = query_router_graph.invoke({"query": "用户的一句话"})
+from src.workflows.application import open_memory_application
+
+config = {
+    "configurable": {
+        "user_id": "user-001",
+        "thread_id": "thread-001",
+        "request_id": str(uuid4()),
+        "project_id": "project-001",
+    }
+}
+with open_memory_application() as application:
+    result = application.invoke({"query": "用户的一句话"}, config=config)
 ```
+
+Run the memory-aware interactive CLI with:
+
+```powershell
+python -m src.workflows.query_router_graph --user-id user-001 --project-id project-001
+```
+
+The module-level `src.workflows.query_router_graph.query_router_graph` remains a
+memoryless compatibility graph for focused tests and integrations that inject no
+database adapters.
 
 The two child workflows remain independently callable for focused use cases:
 

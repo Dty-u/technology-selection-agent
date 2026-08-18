@@ -1,8 +1,20 @@
 """State and validated decisions for the single-query router workflow."""
 
-from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 
-from pydantic import BaseModel, model_validator
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
+
+from pydantic import BaseModel, Field, model_validator
+
+
+class RetrievalAnalysis(BaseModel):
+    """Internal retrieval fields optionally produced by the entry classifier."""
+
+    route: Literal["local_hybrid", "web_search"]
+    query_entities: List[str] = Field(default_factory=list)
+    relation_intent: str = ""
+    relation_types: List[str] = Field(default_factory=list)
 
 
 class QueryRoutingDecision(BaseModel):
@@ -19,6 +31,7 @@ class QueryRoutingDecision(BaseModel):
         Literal["identity", "greeting", "capabilities", "out_of_scope"]
     ] = None
     reason: str
+    retrieval_analysis: Optional[RetrievalAnalysis] = None
 
     @model_validator(mode="after")
     def validate_direct_response_contract(self):
@@ -34,8 +47,9 @@ class QueryRoutingDecision(BaseModel):
         if self.source_preference == "none":
             raise ValueError("retrieval workflows require auto or web")
         self.direct_response_kind = None
+        if self.query_type != "rag_qa":
+            self.retrieval_analysis = None
         return self
-
 
 class QueryRouterInput(TypedDict):
     """Public input accepted by the query router."""
@@ -67,6 +81,8 @@ class QueryRouterOutput(TypedDict, total=False):
     report_format: Literal["markdown", "docx"]
     report_path: Optional[str]
     clarification_questions: List[str]
+    clarification_answers: List[str]
+    clarification_history: List[Dict[str, Any]]
     sources: List[Dict[str, Any]]
     details: Dict[str, Any]
     warnings: List[str]
@@ -83,3 +99,14 @@ class QueryRouterState(QueryRouterOutput, total=False):
     ]
     direct_answer: str
     child_graph_result: Dict[str, Any]
+    messages: Annotated[List[AnyMessage], add_messages]
+    session_user_id: str
+    session_project_id: str
+    memory_context: str
+    short_term_context: str
+    historical_memory_context: str
+    recalled_memory_ids: List[str]
+    memory_scope_valid: bool
+    memory_candidates: List[Dict[str, Any]]
+    memory_write_count: int
+    retrieval_analysis: Dict[str, Any]

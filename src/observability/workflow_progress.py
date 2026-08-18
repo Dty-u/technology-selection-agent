@@ -1,9 +1,12 @@
 """Safe, reusable console progress logging for synchronous workflow stages."""
 
+import inspect
 from contextlib import contextmanager
 from functools import wraps
 from threading import Event, Thread
 from time import perf_counter
+
+from langgraph.errors import GraphInterrupt
 
 from src.observability.logging import log
 
@@ -124,6 +127,16 @@ def progress_stage(
 
     try:
         yield stage
+    except GraphInterrupt:
+        elapsed = perf_counter() - started_at
+        log.info(
+            "[{}][{}] 暂停：{} | 等待用户输入/暂停 | 耗时={:.2f}s",
+            scope,
+            stage_id,
+            action,
+            elapsed,
+        )
+        raise
     except BaseException as exc:
         elapsed = perf_counter() - started_at
         log.error(
@@ -162,9 +175,17 @@ def logged_node(
     result_details=None,
 ):
     """Wrap one synchronous LangGraph node without changing its state contract."""
+    node_takes_config = len(
+        inspect.signature(node).parameters
+    ) >= 2
+
     @wraps(node)
-    def wrapped(state):
+    def wrapped(state, config=None):
         initial_details = safe_progress_details(state)
+        configurable = dict((config or {}).get("configurable", {}) or {})
+        request_id = str(configurable.get("request_id", "") or "").strip()
+        if request_id:
+            initial_details["request_id"] = request_id
         if start_details is not None:
             initial_details.update(start_details(state))
         with progress_stage(
@@ -174,7 +195,10 @@ def logged_node(
             details=initial_details,
             heartbeat_seconds=heartbeat_seconds,
         ) as stage:
-            result = node(state)
+            if node_takes_config:
+                result = node(state, config)
+            else:
+                result = node(state)
             completion_details = safe_progress_details(result)
             if result_details is not None:
                 completion_details.update(result_details(result))

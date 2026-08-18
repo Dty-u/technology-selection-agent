@@ -11,7 +11,7 @@ from src.config.settings import (
     WEB_SEARCH_MAX_ATTEMPTS,
     WEB_SEARCH_MAX_RESULTS,
 )
-from src.infrastructure.llm.chat_model import llm
+from src.infrastructure.llm.chat_model import utility_llm
 from src.infrastructure.search.zhipu import WebSearchError, web_search_tool
 from src.observability.logging import log
 from src.workflows.graders.document_relevance import retrieval_grader_chain
@@ -45,7 +45,7 @@ _WEB_REWRITE_PROMPT = ChatPromptTemplate.from_messages(
         ),
     ]
 )
-web_query_rewriter_chain = _WEB_REWRITE_PROMPT | llm | StrOutputParser()
+web_query_rewriter_chain = _WEB_REWRITE_PROMPT | utility_llm | StrOutputParser()
 
 
 def _contains_ascii_token(text, token):
@@ -204,7 +204,7 @@ def web_search(state):
         log.info("---联网补检达到上限：不再调用搜索服务---")
         return {
             "documents": list(state.get("documents", [])),
-            "question": original_question,
+            "question": question,
             "original_question": original_question,
             "retrieval_source": "web_search",
             "retrieval_error": "web_search_retry_exhausted",
@@ -218,10 +218,10 @@ def web_search(state):
         question
         if compact_relevance
         else (
-            _initial_search_query(original_question)
+            _initial_search_query(question)
             if attempt_count == 0
             else _rewrite_search_query(
-                original_question,
+                question,
                 queries,
                 state.get("generation", ""),
             )
@@ -238,7 +238,7 @@ def web_search(state):
             log.warning("---联网检索暂时不可用：不产生可生成证据---")
             return {
                 "documents": [],
-                "question": original_question,
+                "question": question,
                 "original_question": original_question,
                 "retrieval_source": "web_search",
                 "retrieval_error": "web_search_unavailable",
@@ -253,7 +253,7 @@ def web_search(state):
         relevant_documents = (
             documents
             if compact_relevance
-            else _filter_relevant_documents(original_question, documents)
+            else _filter_relevant_documents(question, documents)
         )
         log.info(
             f"---联网检索批次完成：轮次={attempt_count}，"
@@ -266,7 +266,7 @@ def web_search(state):
             )
             return {
                 "documents": relevant_documents,
-                "question": original_question,
+                "question": question,
                 "original_question": original_question,
                 "retrieval_source": "web_search",
                 "retrieval_error": None,
@@ -280,7 +280,7 @@ def web_search(state):
             break
         log.info("---首次联网结果无关：执行一次精准补检---")
         search_query = _rewrite_search_query(
-            original_question,
+            question,
             queries,
             state.get("generation", ""),
         )
@@ -295,7 +295,7 @@ def web_search(state):
     )
     return {
         "documents": [],
-        "question": original_question,
+        "question": question,
         "original_question": original_question,
         "retrieval_source": "web_search",
         "retrieval_error": error,

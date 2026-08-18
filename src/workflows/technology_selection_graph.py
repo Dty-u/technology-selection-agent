@@ -104,7 +104,7 @@ workflow.add_conditional_edges(
         "clarify_requirements": "clarify_requirements",
     },
 )
-workflow.add_edge("clarify_requirements", END)
+workflow.add_edge("clarify_requirements", "parse_requirements")
 workflow.add_edge("generate_candidates", "screen_hard_constraints")
 workflow.add_conditional_edges(
     "screen_hard_constraints",
@@ -139,3 +139,68 @@ workflow.add_conditional_edges(
 workflow.add_edge("generate_report", END)
 
 technology_selection_graph = workflow.compile()
+
+
+def build_technology_selection_graph(checkpointer=None):
+    """Compile the technology-selection workflow with an optional checkpointer."""
+    checkpointed_workflow = StateGraph(TechnologySelectionState)
+    for node_name, action, node, options in _NODES:
+        checkpointed_workflow.add_node(
+            node_name,
+            logged_node("技术选型", node_name, action, node, **options),
+        )
+    checkpointed_workflow.add_edge(START, "parse_requirements")
+    checkpointed_workflow.add_conditional_edges(
+        "parse_requirements",
+        route_requirements,
+        {
+            "generate_candidates": "generate_candidates",
+            "clarify_requirements": "clarify_requirements",
+        },
+    )
+    checkpointed_workflow.add_edge("clarify_requirements", "parse_requirements")
+    checkpointed_workflow.add_edge(
+        "generate_candidates",
+        "screen_hard_constraints",
+    )
+    checkpointed_workflow.add_conditional_edges(
+        "screen_hard_constraints",
+        route_feasible_candidates,
+        {
+            "plan_evidence_tasks": "plan_evidence_tasks",
+            "clarify_requirements": "clarify_requirements",
+        },
+    )
+    checkpointed_workflow.add_edge("plan_evidence_tasks", "retrieve_evidence")
+    checkpointed_workflow.add_conditional_edges(
+        "retrieve_evidence",
+        route_evidence,
+        {
+            "optimize_evidence_queries": "optimize_evidence_queries",
+            "evaluate_candidates": "evaluate_candidates",
+        },
+    )
+    checkpointed_workflow.add_edge(
+        "optimize_evidence_queries",
+        "retrieve_evidence",
+    )
+    checkpointed_workflow.add_edge("evaluate_candidates", "analyze_risks")
+    checkpointed_workflow.add_edge(
+        "analyze_risks",
+        "generate_recommendation",
+    )
+    checkpointed_workflow.add_edge(
+        "generate_recommendation",
+        "review_recommendation",
+    )
+    checkpointed_workflow.add_conditional_edges(
+        "review_recommendation",
+        route_recommendation_review,
+        {
+            "optimize_evidence_queries": "optimize_evidence_queries",
+            "evaluate_candidates": "evaluate_candidates",
+            "generate_report": "generate_report",
+        },
+    )
+    checkpointed_workflow.add_edge("generate_report", END)
+    return checkpointed_workflow.compile(checkpointer=checkpointer)

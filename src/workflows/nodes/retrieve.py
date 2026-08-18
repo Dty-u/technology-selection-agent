@@ -1,4 +1,9 @@
-from src.config.bootstrap import get_retriever
+from src.config.bootstrap import (
+    get_retriever,
+    mark_resource_failed,
+    mark_resource_ready,
+    resource_retry_allowed,
+)
 from src.observability.logging import log
 
 
@@ -13,7 +18,26 @@ def retrieve(state):
     """
     log.info("---开始向量检索---")
     question = state["question"]  # 从状态中获取用户问题
-    # 文档检索
-    documents = get_retriever().invoke(question)  # 调用检索器获取相关文档
+    if not resource_retry_allowed("vector"):
+        return {
+            "vector_documents": [],
+            "vector_error": "resource_failure_cooldown",
+            "question": question,
+        }
+    try:
+        documents = get_retriever().invoke(question)
+        mark_resource_ready("vector")
+    except Exception as error:
+        mark_resource_failed("vector")
+        log.error("---向量检索失败：将在冷却期后重试---")
+        return {
+            "vector_documents": [],
+            "vector_error": str(error),
+            "question": question,
+        }
     log.info(f"---向量检索完成：候选文档 {len(documents)} 条---")
-    return {"vector_documents": documents, "question": question}
+    return {
+        "vector_documents": documents,
+        "vector_error": None,
+        "question": question,
+    }

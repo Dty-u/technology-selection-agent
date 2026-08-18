@@ -19,6 +19,7 @@ class GraphState(TypedDict, total=False):
     graph_documents: List[Document]
     retrieval_source: Literal["local_hybrid", "web_search"]
     graph_error: Optional[str]
+    vector_error: Optional[str]
     retrieval_error: Optional[str]
     generation_attempt_count: int
     web_search_query: str
@@ -27,3 +28,6 @@ class GraphState(TypedDict, total=False):
     web_relevant_result_count: int
     source_preference: Literal["auto", "web"]
     response_type: Literal["answer", "report"]
+    memory_context: str
+    short_term_context: str
+    analysis_ready: bool

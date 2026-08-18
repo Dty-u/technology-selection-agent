@@ -19,6 +19,12 @@ def route_retrieval_result(state):
     """Finish with evidence, otherwise rewrite locally before Web fallback."""
     if state.get("documents"):
         return END
+    if (
+        state.get("vector_error")
+        and state.get("graph_error")
+        and state.get("allow_web_fallback", True)
+    ):
+        return "web_search"
     max_transform_count = state.get(
         "max_transform_count",
         MAX_TRANSFORM_COUNT,

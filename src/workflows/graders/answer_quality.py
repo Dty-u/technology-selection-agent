@@ -2,7 +2,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from pydantic import Field, BaseModel
 
-from src.infrastructure.llm.chat_model import llm
+from src.infrastructure.llm.chat_model import utility_llm
 
 
 # 数据模型 - 回答质量评分
@@ -15,7 +15,7 @@ class GradeAnswer(BaseModel):
 
 
 # 初始化带函数调用的LLM
-structured_llm_grader = llm | RunnableLambda( # 绑定结构化输出到评分模型
+structured_llm_grader = utility_llm | RunnableLambda( # 绑定结构化输出到评分模型
     lambda message: GradeAnswer(binary_score=message.content.strip().lower())
 )
 

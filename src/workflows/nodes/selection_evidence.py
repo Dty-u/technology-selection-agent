@@ -430,6 +430,13 @@ def plan_evidence_tasks(state):
             ),
             criteria=list(criteria),
             source_preference=source_preference,
+            query_entities=[
+                candidate.get("name", "")
+                for candidate in candidates
+                if candidate.get("name")
+            ],
+            relation_intent=f"比较候选技术在 {criterion_labels} 方面的影响关系",
+            relation_types=["AFFECTS", "IMPROVES", "REDUCES", "REQUIRES"],
         ).model_dump()
 
     scenario_criteria = [
@@ -803,6 +810,16 @@ def _retrieve_task(task):
                 "allow_web_fallback": task.source_preference == "web",
                 "generation_attempt_count": 0,
             }
+            if task.query_entities and task.relation_intent:
+                retrieval_inputs.update(
+                    {
+                        "analysis_ready": True,
+                        "route": "local_hybrid",
+                        "query_entities": list(task.query_entities),
+                        "relation_intent": task.relation_intent,
+                        "relation_types": list(task.relation_types),
+                    }
+                )
             if task.source_preference == "web":
                 retrieval_inputs.update(
                     {

@@ -82,6 +82,43 @@ class ZhipuSearchTest(unittest.TestCase):
 
 
 class WebSearchNodeTest(unittest.TestCase):
+    def test_search_keeps_the_contextual_question_for_a_pronoun_follow_up(self):
+        from src.workflows.nodes.web_search import web_search
+
+        contextual_question = (
+            "会话摘要：已讨论光刻机及其半导体制造用途。\n"
+            "当前用户问题：它主要应用在哪些领域？"
+        )
+        results = [
+            {
+                "title": "光刻机应用",
+                "url": "https://example.com/lithography",
+                "content": "光刻机用于半导体晶圆制造。",
+            }
+        ]
+        grader = MagicMock()
+        grader.invoke.return_value = SimpleNamespace(relevant_indices=[0])
+        with patch(
+            "src.workflows.nodes.web_search.web_search_tool.invoke",
+            return_value=results,
+        ) as search, patch(
+            "src.workflows.nodes.web_search.retrieval_grader_chain",
+            grader,
+        ):
+            result = web_search(
+                {
+                    "question": contextual_question,
+                    "original_question": "它主要应用在哪些领域？",
+                }
+            )
+
+        self.assertIn("光刻机", search.call_args.args[0])
+        self.assertIn(
+            "光刻机",
+            grader.invoke.call_args.args[0]["question"],
+        )
+        self.assertEqual(result["question"], contextual_question)
+
     def test_ordinary_search_expands_semiconductor_acronym_and_uses_pro_budget(self):
         from src.workflows.nodes.web_search import web_search
 

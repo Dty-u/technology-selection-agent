@@ -134,6 +134,9 @@ class EvidenceTask(BaseModel):
     query: str
     criteria: List[str] = Field(default_factory=lambda: list(CRITERIA))
     source_preference: Literal["auto", "local", "web"] = "auto"
+    query_entities: List[str] = Field(default_factory=list)
+    relation_intent: str = ""
+    relation_types: List[str] = Field(default_factory=list)
 
 
 class EvidenceSupport(BaseModel):
@@ -225,6 +228,7 @@ class TechnologySelectionState(TypedDict, total=False):
 
     user_request: str
     clarification_answers: List[str]
+    clarification_history: List[Dict[str, Any]]
     status: Literal[
         "running",
         "awaiting_user",
@@ -244,6 +248,7 @@ class TechnologySelectionState(TypedDict, total=False):
     missing_evidence_queries: List[str]
     evidence_round: int
     evaluations: List[Dict[str, Any]]
+    precomputed_risk_items: List[Dict[str, Any]]
     risk_items: List[Dict[str, Any]]
     recommendation: Dict[str, Any]
     recommendation_review: Dict[str, Any]
@@ -251,3 +256,5 @@ class TechnologySelectionState(TypedDict, total=False):
     report: str
     report_data: Dict[str, Any]
     warnings: List[str]
+    memory_context: str
+    short_term_context: str

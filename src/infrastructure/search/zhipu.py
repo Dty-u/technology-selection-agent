@@ -3,13 +3,14 @@
 import json
 from urllib.request import Request, urlopen
 
-from src.config.settings import WEB_SEARCH_MAX_RESULTS, ZHIPU_API_KEY
+from src.config.settings import (
+    WEB_SEARCH_MAX_RESULTS,
+    WEB_SEARCH_TIMEOUT_SECONDS,
+    ZHIPU_API_KEY,
+)
 
 
 _WEB_SEARCH_URL = "https://open.bigmodel.cn/api/paas/v4/web_search"
-_WEB_SEARCH_TIMEOUT_SECONDS = 30
-
-
 class WebSearchError(RuntimeError):
     """Raised when Zhipu cannot return usable search results."""
 
@@ -38,7 +39,7 @@ def _request_web_search(
         },
         method="POST",
     )
-    with urlopen(request, timeout=_WEB_SEARCH_TIMEOUT_SECONDS) as response:
+    with urlopen(request, timeout=WEB_SEARCH_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

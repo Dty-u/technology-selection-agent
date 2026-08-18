@@ -1,6 +1,7 @@
 """Evaluation, risk, recommendation, review, and report nodes."""
 
 import json
+import logging
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -28,6 +29,9 @@ from src.workflows.technology_selection_state import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 evaluation_prompt = ChatPromptTemplate.from_messages(
     [
         (
@@ -36,6 +40,14 @@ evaluation_prompt = ChatPromptTemplate.from_messages(
 performance 只评价带宽、吞吐、频率、延迟或生产效率；thermal 单独评价散热、温度和热管理。每项按1到5分评价，5分始终代表更适合。
 每项数值分必须引用对该候选和该指标具有 direct 或 indirect 相关支持的 evidence_id。direct 可给中高置信度，indirect 应给低或中置信度；无相关证据时 score 必须为 null。
 只返回JSON：{{"evaluations":[{{"candidate_id":"id","criterion_scores":[{{"criterion":"performance","score":4,"rationale":"依据","evidence_ids":["E1"],"confidence":"medium"}}],"scenario_scores":[{{"criterion":"scenario_id","score":5,"rationale":"依据","evidence_ids":["E2"],"confidence":"high"}}]}}]}}。""",
+        ),
+        (
+            "system",
+            "在同一次响应中同时返回 risk_items。risk_items 每项必须包含 "
+            "candidate_id、category、level、impact、mitigation、evidence_ids、basis；"
+            "basis 只能是 evidence、inference 或 to_verify 之一；不要把风险说明、"
+            "证据摘要或其他自然语言填入 basis，应放入 impact 或 mitigation。"
+            "最终 JSON 顶层结构为 evaluations 和 risk_items。",
         ),
         (
             "human",
@@ -63,6 +75,27 @@ level 只能是 low、medium、high 或 unknown；无法判断风险等级时用
     ]
 )
 risk_analysis_chain = risk_prompt | selection_llm
+
+
+risk_repair_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Repair the JSON risk_items array to satisfy the required schema. "
+            "Return JSON only in the form {\"risk_items\":[...]}. Preserve the "
+            "candidate_id, category, level, impact, mitigation, and evidence_ids "
+            "when they are already valid. The basis field must be exactly one of "
+            "evidence, inference, or to_verify. Do not put explanations in basis; "
+            "place them in impact or mitigation instead.",
+        ),
+        (
+            "human",
+            "Validation error: {validation_error}\n"
+            "Risk JSON to repair: {risk_items}",
+        ),
+    ]
+)
+risk_repair_chain = risk_repair_prompt | selection_llm
 
 
 recommendation_prompt = ChatPromptTemplate.from_messages(
@@ -365,6 +398,7 @@ def evaluate_candidates(state):
     result = {
         "evaluations": evaluations,
         "evidence_gaps": list(dict.fromkeys(gaps)),
+        "precomputed_risk_items": payload.get("risk_items"),
     }
     set_selection_cache(
         "evaluate_candidates",
@@ -376,12 +410,46 @@ def evaluate_candidates(state):
     return result
 
 
+def _validated_risk_items(raw_items, evidence_records):
+    if not isinstance(raw_items, list):
+        raise ValueError("risk_items must be a list")
+    evidence_candidates = {
+        record["evidence_id"]: set(record.get("candidate_ids", []))
+        for record in evidence_records
+    }
+    risks = []
+    for item in raw_items:
+        risk = RiskItem.model_validate(item)
+        risk.evidence_ids = [
+            evidence_id
+            for evidence_id in risk.evidence_ids
+            if risk.candidate_id in evidence_candidates.get(evidence_id, set())
+        ]
+        if risk.basis == "evidence" and not risk.evidence_ids:
+            risk.basis = "to_verify"
+        risks.append(risk.model_dump())
+    return risks
+
+
+def _repair_precomputed_risk_items(raw_items, validation_error):
+    """Ask once for a schema-only repair before recomputing risk analysis."""
+    response = risk_repair_chain.invoke(
+        {
+            "validation_error": str(validation_error),
+            "risk_items": json.dumps(raw_items, ensure_ascii=False),
+        }
+    )
+    payload = parse_json_object(_response_content(response))
+    return payload.get("risk_items")
+
+
 def analyze_risks(state):
     """Return source-linked risk items and downgrade unsupported assertions."""
     cache_inputs = {
         "requirements": state.get("requirements", {}),
         "evaluations": state.get("evaluations", []),
         "evidence_records": state.get("evidence_records", []),
+        "precomputed_risk_items": state.get("precomputed_risk_items"),
     }
     cached = get_selection_cache(
         "analyze_risks",
@@ -391,6 +459,55 @@ def analyze_risks(state):
     )
     if cached is not None:
         return cached
+    if "precomputed_risk_items" in state:
+        try:
+            risks = _validated_risk_items(
+                state.get("precomputed_risk_items"),
+                state.get("evidence_records", []),
+            )
+            result = {"risk_items": risks}
+            set_selection_cache(
+                "analyze_risks",
+                risk_analysis_chain,
+                risk_prompt,
+                cache_inputs,
+                result,
+            )
+            return result
+        except (TypeError, ValueError) as exc:
+            if isinstance(state.get("precomputed_risk_items"), list):
+                logger.info(
+                    "Precomputed risk assessment is invalid; attempting repair: %s",
+                    exc,
+                )
+                try:
+                    repaired_items = _repair_precomputed_risk_items(
+                        state.get("precomputed_risk_items"),
+                        exc,
+                    )
+                    risks = _validated_risk_items(
+                        repaired_items,
+                        state.get("evidence_records", []),
+                    )
+                    result = {"risk_items": risks}
+                    set_selection_cache(
+                        "analyze_risks",
+                        risk_analysis_chain,
+                        risk_prompt,
+                        cache_inputs,
+                        result,
+                    )
+                    return result
+                except (TypeError, ValueError) as repair_exc:
+                    logger.warning(
+                        "Precomputed risk repair is invalid; using risk chain: %s",
+                        repair_exc,
+                    )
+            else:
+                logger.warning(
+                    "Precomputed risk assessment is invalid; using risk chain: %s",
+                    exc,
+                )
     response = risk_analysis_chain.invoke(
         {
             "requirements": json.dumps(
@@ -408,21 +525,10 @@ def analyze_risks(state):
         }
     )
     payload = parse_json_object(_response_content(response))
-    evidence_candidates = {
-        record["evidence_id"]: set(record.get("candidate_ids", []))
-        for record in state.get("evidence_records", [])
-    }
-    risks = []
-    for item in payload.get("risk_items", []):
-        risk = RiskItem.model_validate(item)
-        risk.evidence_ids = [
-            evidence_id
-            for evidence_id in risk.evidence_ids
-            if risk.candidate_id in evidence_candidates.get(evidence_id, set())
-        ]
-        if risk.basis == "evidence" and not risk.evidence_ids:
-            risk.basis = "to_verify"
-        risks.append(risk.model_dump())
+    risks = _validated_risk_items(
+        payload.get("risk_items"),
+        state.get("evidence_records", []),
+    )
     result = {"risk_items": risks}
     set_selection_cache(
         "analyze_risks",
@@ -1295,6 +1401,15 @@ def build_report_data(state):
     return {
         "schema_version": "1.0",
         "report_version": "2.0",
+        "conversation": {
+            "user_request": state.get("user_request", ""),
+            "clarification_answers": list(
+                state.get("clarification_answers", []) or []
+            ),
+            "clarification_history": list(
+                state.get("clarification_history", []) or []
+            ),
+        },
         "decision": {
             "status": recommendation.get("decision", "insufficient_evidence"),
             "status_label": DECISION_LABELS.get(
@@ -1422,6 +1537,7 @@ def generate_report(state):
         "| 项目 | 内容 |",
         "|---|---|",
         f"| 选型主题 | {_markdown_cell(requirements.get('business_goal', ''))} |",
+        f"| 原始需求 | {_markdown_cell(state.get('user_request', ''))} |",
         f"| 结论状态 | {DECISION_LABELS.get(recommendation.get('decision'), '待判断')} |",
         f"| 审核状态 | {REVIEW_LABELS.get(review.get('verdict'), '未审核')} |",
         f"| 结论可信度 | {CONFIDENCE_LABELS[confidence]} |",
@@ -1458,15 +1574,34 @@ def generate_report(state):
         "- 硬约束："
         + ("；".join(requirements.get("hard_constraints", [])) or "未提供"),
         "",
-        "### 评分说明",
-        "",
-        "- 评分范围为1至5分，5分表示在当前场景下更适合。",
-        "- `—`表示因证据不足而未评分，不代表0分。",
-        "- “本次未纳入”表示该指标权重为0，未参与检索、评分和综合分计算。",
-        "",
-        "## 3. 方案对比总表",
+        "### 澄清记录",
         "",
     ]
+    clarification_history = list(state.get("clarification_history", []) or [])
+    if clarification_history:
+        for round_index, round_item in enumerate(
+            clarification_history,
+            start=1,
+        ):
+            questions = "；".join(
+                str(question)
+                for question in round_item.get("questions", [])
+                if str(question).strip()
+            )
+            answer = _markdown_cell(round_item.get("answer", ""))
+            lines.append(f"- 第{round_index}轮问题：{_markdown_cell(questions)}")
+            lines.append(f"  回答：{answer}")
+    else:
+        lines.append("- 本轮未发起需求澄清。")
+    lines.append("")
+    lines.append("### 评分说明")
+    lines.append("")
+    lines.append("- 评分范围为1至5分，5分表示在当前场景下更适合。")
+    lines.append("- `—`表示因证据不足而未评分，不代表0分。")
+    lines.append("- “本次未纳入”表示该指标权重为0，未参与检索、评分和综合分计算。")
+    lines.append("")
+    lines.append("## 3. 方案对比总表")
+    lines.append("")
     lines.append(
         "| 指标 | 权重 | "
         + " | ".join(_markdown_cell(name) for name in candidate_names)
