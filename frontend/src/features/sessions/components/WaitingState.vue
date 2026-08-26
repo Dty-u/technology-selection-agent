@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { LoaderCircle, PauseCircle, RefreshCw } from '@lucide/vue'
+import { LoaderCircle } from '@lucide/vue'
 
-defineProps<{ canStop: boolean; detached?: boolean }>()
-const emit = defineEmits<{ stop: []; sync: [] }>()
+const props = defineProps<{ canExit: boolean; cancelling?: boolean; startedAt?: string }>()
+const emit = defineEmits<{ exit: [] }>()
 
-const startedAt = Date.now()
-const elapsed = ref(0)
-const timer = window.setInterval(() => (elapsed.value = Date.now() - startedAt), 1_000)
+const mountedAt = Date.now()
+const currentTime = ref(mountedAt)
+const timer = window.setInterval(() => (currentTime.value = Date.now()), 1_000)
 onBeforeUnmount(() => window.clearInterval(timer))
 
+const startedAt = computed(() => {
+  const parsed = props.startedAt ? Date.parse(props.startedAt) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : mountedAt
+})
 const elapsedLabel = computed(() => {
-  const seconds = Math.floor(elapsed.value / 1_000)
+  const seconds = Math.floor(Math.max(0, currentTime.value - startedAt.value) / 1_000)
   const minutes = Math.floor(seconds / 60)
   return minutes ? `${minutes} 分 ${seconds % 60} 秒` : `${seconds} 秒`
 })
@@ -19,16 +23,12 @@ const elapsedLabel = computed(() => {
 
 <template>
   <div class="waiting-state" role="status" aria-live="polite">
-    <LoaderCircle v-if="!detached" class="spin" :size="18" aria-hidden="true" />
-    <PauseCircle v-else :size="18" aria-hidden="true" />
+    <LoaderCircle class="spin" :size="18" aria-hidden="true" />
     <div>
-      <strong>{{ detached ? '浏览器已停止等待' : '服务端正在处理' }}</strong>
-      <p v-if="!detached">已等待 {{ elapsedLabel }}，这不是工作流节点进度。</p>
-      <p v-else>服务端任务可能仍在运行，请稍后同步可验证状态。</p>
+      <strong>{{ cancelling ? '正在结束本次请求' : '服务端正在处理' }}</strong>
+      <p v-if="!cancelling">已等待 {{ elapsedLabel }}，真实阶段会在右侧执行轨迹中更新。</p>
+      <p v-else>当前节点结束后将停止后续工作流步骤，并保留已有会话记录。</p>
     </div>
-    <button v-if="canStop" type="button" class="text-button" @click="emit('stop')">停止等待</button>
-    <button v-if="detached" type="button" class="text-button" @click="emit('sync')">
-      <RefreshCw :size="14" aria-hidden="true" /> 同步最新状态
-    </button>
+    <button v-if="canExit" type="button" class="text-button" @click="emit('exit')">退出本次请求</button>
   </div>
 </template>

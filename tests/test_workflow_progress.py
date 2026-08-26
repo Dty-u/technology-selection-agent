@@ -20,8 +20,11 @@ class WorkflowProgressTest(unittest.TestCase):
         return messages
 
     def test_logged_node_reports_safe_start_completion_and_duration(self):
+        from src.observability.workflow_progress import observe_progress
+
         logged_node = _load_progress_api(self)
         messages = self._capture_messages()
+        events = []
 
         def node(_state):
             return {
@@ -40,7 +43,8 @@ class WorkflowProgressTest(unittest.TestCase):
             node,
             heartbeat_seconds=None,
         )
-        result = wrapped({"query": "private user query"})
+        with observe_progress(events.append):
+            result = wrapped({"query": "private user query"})
         rendered = "\n".join(str(message) for message in messages)
 
         self.assertEqual(result["status"], "completed")
@@ -53,6 +57,14 @@ class WorkflowProgressTest(unittest.TestCase):
         self.assertNotIn("private user query", rendered)
         self.assertNotIn("private evidence body", rendered)
         self.assertNotIn("private report body", rendered)
+        self.assertEqual(
+            [event["status"] for event in events],
+            ["running", "completed"],
+        )
+        self.assertEqual(events[0]["label"], "执行示例节点")
+        self.assertGreaterEqual(events[1]["duration_ms"], 0)
+        self.assertNotIn("private user query", str(events))
+        self.assertNotIn("private evidence body", str(events))
 
     def test_logged_node_emits_repeated_heartbeats_and_stops_after_completion(self):
         logged_node = _load_progress_api(self)

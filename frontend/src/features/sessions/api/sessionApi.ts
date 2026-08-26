@@ -2,7 +2,12 @@ import { z } from 'zod'
 
 import { ApiError } from '@/shared/api/errors'
 import { requestBlob, requestJson, requestVoid } from '@/shared/api/http'
-import { parseSessionResponse, type SessionResponse } from './sessionSchemas'
+import {
+  parseCancelSessionResponse,
+  parseSessionResponse,
+  type CancelSessionResponse,
+  type SessionResponse,
+} from './sessionSchemas'
 
 export type ApiSettings = {
   apiBaseUrl: string
@@ -45,6 +50,7 @@ export function createSessionApi(settings: ApiSettings, fetcher: typeof fetch = 
     createSession(
       message: MessageRequest,
       requestId: string,
+      threadId: string,
       signal?: AbortSignal,
     ): Promise<SessionResponse> {
       return requestJson(
@@ -54,6 +60,7 @@ export function createSessionApi(settings: ApiSettings, fetcher: typeof fetch = 
           method: 'POST',
           headers: {
             ...sessionHeaders(requestId),
+            'X-Thread-ID': threadId,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(message),
@@ -94,6 +101,15 @@ export function createSessionApi(settings: ApiSettings, fetcher: typeof fetch = 
       )
     },
 
+    cancelSession(threadId: string, signal?: AbortSignal): Promise<CancelSessionResponse> {
+      return requestJson(
+        fetcher,
+        `${sessionUrl(threadId)}/cancel`,
+        { method: 'POST', headers: sessionHeaders(), signal },
+        parseCancelSessionResponse,
+      )
+    },
+
     closeSession(threadId: string, signal?: AbortSignal): Promise<void> {
       return requestVoid(fetcher, sessionUrl(threadId), {
         method: 'DELETE',
@@ -102,17 +118,24 @@ export function createSessionApi(settings: ApiSettings, fetcher: typeof fetch = 
       })
     },
 
-    downloadReport(reportUrl: string, signal?: AbortSignal) {
+    async downloadReport(reportUrl: string, fallbackFilename?: string, signal?: AbortSignal) {
       const target = new URL(reportUrl, `${baseUrl}/`)
       const apiOrigin = new URL(baseUrl).origin
       if (target.origin !== apiOrigin) {
         throw new ApiError(0, 'unsafe_report_url', '报告地址不属于当前 Agent API。')
       }
-      return requestBlob(fetcher, target.toString(), {
+      const downloaded = await requestBlob(fetcher, target.toString(), {
         method: 'GET',
         headers: sessionHeaders(),
         signal,
       })
+      return {
+        ...downloaded,
+        filename:
+          downloaded.filename === 'technology-selection-report.docx' && fallbackFilename
+            ? fallbackFilename
+            : downloaded.filename,
+      }
     },
   }
 }

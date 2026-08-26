@@ -1,6 +1,6 @@
 """Production composition root for checkpointed, memory-aware workflows."""
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Iterator
 
 from src.config.settings import (
@@ -9,7 +9,10 @@ from src.config.settings import (
     WARMUP_ON_START,
 )
 from src.config.bootstrap import warm_technology_selection_resources
-from src.infrastructure.checkpointing.mysql import open_mysql_checkpointer
+from src.infrastructure.checkpointing.mysql import (
+    open_async_mysql_checkpointer,
+    open_mysql_checkpointer,
+)
 from src.infrastructure.memory.milvus import MilvusMemoryIndex
 from src.infrastructure.memory.mysql import MySQLMemoryRepository
 from src.observability.logging import log
@@ -50,3 +53,36 @@ def open_memory_application(
             graph=graph,
             checkpointer=checkpointer,
         )
+
+
+@asynccontextmanager
+async def open_async_memory_application(
+    *,
+    checkpoint_uri: str = MYSQL_CHECKPOINT_URI,
+    memory_uri: str = MYSQL_MEMORY_URI,
+    semantic_memory_reader: Any | None = None,
+    setup_checkpoint: bool = False,
+):
+    """Open the ASGI workflow with an async MySQL checkpoint saver."""
+    repository = MySQLMemoryRepository(memory_uri)
+    if semantic_memory_reader is None:
+        semantic_memory_reader = MilvusMemoryIndex()
+    if WARMUP_ON_START:
+        warmup = warm_technology_selection_resources(semantic_memory_reader)
+        log.info(
+            "[启动][只读预热] 完成 | vector={} | graph={} | memory={}",
+            warmup.get("vector", "unknown"),
+            warmup.get("graph", "unknown"),
+            warmup.get("memory", "unknown"),
+        )
+    async with open_async_mysql_checkpointer(
+        checkpoint_uri,
+        setup=setup_checkpoint,
+    ) as checkpointer:
+        graph = build_query_router_graph(
+            checkpointer,
+            memory_repository=repository,
+            semantic_memory_reader=semantic_memory_reader,
+            async_nodes=True,
+        )
+        yield MemoryAwareRunner(graph=graph, checkpointer=checkpointer)

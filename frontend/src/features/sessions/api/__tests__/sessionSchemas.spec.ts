@@ -119,6 +119,15 @@ const completedResponse = {
   sources: [],
   warnings: [],
   report_url: '/api/v1/projects/project-a/sessions/222/report',
+  reports: [
+    {
+      report_id: 'report-1',
+      title: '移动 SoC 技术选型',
+      created_at: '2026-08-23T09:00:00+00:00',
+      format: 'markdown',
+      download_url: '/api/v1/projects/project-a/sessions/222/reports/report-1',
+    },
+  ],
   future_top_level_field: true,
 }
 
@@ -129,12 +138,42 @@ describe('sessionSchemas', () => {
     expect(parsed.status).toBe('completed')
     expect(parsed.query_type).toBe('technology_selection')
     expect(parsed.report_data.future_field).toBe('must remain accepted')
+    expect(parsed.reports[0]?.title).toBe('移动 SoC 技术选型')
   })
 
   it('rejects unsupported workflow statuses at the HTTP boundary', () => {
     expect(() =>
       parseSessionResponse({ ...completedResponse, status: 'secret_internal_state' }),
     ).toThrow(/status/i)
+  })
+
+  it('parses a safe workflow execution trace', () => {
+    const parsed = parseSessionResponse({
+      ...completedResponse,
+      progress: {
+        request_id: completedResponse.request_id,
+        active: true,
+        current_stage: {
+          scope: '普通RAG',
+          stage_id: 'vector_retrieve',
+          label: '向量检索',
+        },
+        events: [
+          {
+            scope: '普通RAG',
+            stage_id: 'vector_retrieve',
+            label: '向量检索',
+            status: 'running',
+            started_at: '2026-08-23T00:00:00+00:00',
+            finished_at: null,
+            duration_ms: null,
+          },
+        ],
+      },
+    })
+
+    expect(parsed.progress?.active).toBe(true)
+    expect(parsed.progress?.current_stage?.label).toBe('向量检索')
   })
 
   it('parses a complete report_data v1 contract', () => {

@@ -13,7 +13,7 @@ const messageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z.string(),
   createdAt: z.string(),
-  delivery: z.enum(['pending', 'sent', 'failed']),
+  delivery: z.enum(['pending', 'sent', 'cancelled', 'failed']),
   requestId: z.string().optional(),
 })
 
@@ -24,7 +24,14 @@ const localSessionSchema = z.object({
   title: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  status: z.enum(['running', 'completed', 'awaiting_user', 'needs_human_review', 'error']),
+  status: z.enum([
+    'running',
+    'completed',
+    'awaiting_user',
+    'needs_human_review',
+    'cancelled',
+    'error',
+  ]),
   messages: z.array(messageSchema),
 })
 

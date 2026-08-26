@@ -76,6 +76,27 @@ class QueryClassificationTest(unittest.TestCase):
         self.assertEqual(result["response_type"], "answer")
         chain.invoke.assert_called_once()
 
+    def test_explanatory_comparison_overrides_mistaken_selection_route(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content=(
+                '{"query_type":"technology_selection",'
+                '"source_preference":"auto","response_type":"report",'
+                '"reason":"误将知识比较判为选型"}'
+            )
+        )
+
+        with patch.object(router_module, "query_classification_chain", chain):
+            result = router_module.classify_query(
+                {"query": "对比FinFET和GAA的工作原理"}
+            )
+
+        self.assertEqual(result["query_type"], "rag_qa")
+        self.assertEqual(result["source_preference"], "auto")
+        self.assertEqual(result["response_type"], "answer")
+
     def test_non_semiconductor_comparison_still_uses_classification_model(self):
         import src.workflows.nodes.query_router as router_module
 
@@ -138,6 +159,97 @@ class QueryClassificationTest(unittest.TestCase):
         self.assertEqual(result["source_preference"], "none")
         self.assertEqual(result["direct_response_kind"], "out_of_scope")
         self.assertEqual(result["status"], "running")
+
+    def test_explicit_semiconductor_knowledge_overrides_mistaken_direct_route(self):
+        import src.workflows.nodes.query_router as router_module
+
+        cases = (
+            "半导体是啥",
+            "芯片是什么意思",
+            "GAA 的工作原理是什么",
+            "光刻机有什么用",
+            "MOSFET是什么",
+            "HBM和DRAM有什么区别",
+            "EDA是做什么用的",
+        )
+        for query in cases:
+            with self.subTest(query=query):
+                chain = MagicMock()
+                chain.invoke.return_value = AIMessage(
+                    content=(
+                        '{"query_type":"direct_response",'
+                        '"source_preference":"none","response_type":"answer",'
+                        '"direct_response_kind":"out_of_scope",'
+                        '"reason":"误判为非半导体问题"}'
+                    )
+                )
+
+                with patch.object(router_module, "query_classification_chain", chain):
+                    result = router_module.classify_query(
+                        {
+                            "query": query,
+                            "short_term_context": (
+                                "[用户] 李白是谁\n"
+                                "[助手] 这个问题超出了半导体服务范围。"
+                            ),
+                        }
+                    )
+
+                self.assertEqual(result["query_type"], "rag_qa")
+                self.assertEqual(result["source_preference"], "auto")
+                self.assertEqual(result["response_type"], "answer")
+                self.assertNotIn("direct_response_kind", result)
+                chain.invoke.assert_called_once()
+
+    def test_explicit_knowledge_report_keeps_report_response_type_when_repaired(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content=(
+                '{"query_type":"direct_response",'
+                '"source_preference":"none","response_type":"answer",'
+                '"direct_response_kind":"out_of_scope",'
+                '"reason":"误判为越界请求"}'
+            )
+        )
+
+        with patch.object(router_module, "query_classification_chain", chain):
+            result = router_module.classify_query(
+                {"query": "生成一份EUV工作原理报告"}
+            )
+
+        self.assertEqual(result["query_type"], "rag_qa")
+        self.assertEqual(result["source_preference"], "auto")
+        self.assertEqual(result["response_type"], "report")
+
+    def test_semiconductor_word_does_not_override_meta_or_creative_direct_routes(self):
+        import src.workflows.nodes.query_router as router_module
+
+        cases = (
+            ("你能回答半导体问题吗", "capabilities"),
+            ("写一首关于半导体的诗", "out_of_scope"),
+        )
+        for query, direct_response_kind in cases:
+            with self.subTest(query=query):
+                chain = MagicMock()
+                chain.invoke.return_value = AIMessage(
+                    content=(
+                        '{"query_type":"direct_response",'
+                        '"source_preference":"none","response_type":"answer",'
+                        f'"direct_response_kind":"{direct_response_kind}",'
+                        '"reason":"入口层直接响应"}'
+                    )
+                )
+
+                with patch.object(router_module, "query_classification_chain", chain):
+                    result = router_module.classify_query({"query": query})
+
+                self.assertEqual(result["query_type"], "direct_response")
+                self.assertEqual(
+                    result["direct_response_kind"],
+                    direct_response_kind,
+                )
 
     def test_time_sensitive_rag_question_overrides_model_auto_source_to_web(self):
         import src.workflows.nodes.query_router as router_module
@@ -335,6 +447,98 @@ class QueryClassificationTest(unittest.TestCase):
         self.assertEqual(result["source_preference"], "auto")
         self.assertEqual(result["response_type"], "answer")
         self.assertIn("短期会话原文", result["routing_reason"])
+
+    def test_colloquial_pronoun_follow_up_overrides_mistaken_capabilities_route(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content=(
+                '{"query_type":"direct_response",'
+                '"source_preference":"none","response_type":"answer",'
+                '"direct_response_kind":"capabilities",'
+                '"reason":"误认为用户在询问助手能力"}'
+            )
+        )
+
+        with patch.object(router_module, "query_classification_chain", chain):
+            result = router_module.classify_query(
+                {
+                    "query": "他有什么用？",
+                    "short_term_context": (
+                        "[用户] 光刻机是什么\n"
+                        "[助手] 光刻机是芯片制造的关键设备。"
+                    ),
+                }
+            )
+
+        self.assertEqual(result["query_type"], "rag_qa")
+        self.assertEqual(result["source_preference"], "auto")
+        self.assertEqual(result["response_type"], "answer")
+        self.assertNotIn("direct_response_kind", result)
+
+    def test_explicit_capability_request_stays_direct_with_semiconductor_history(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        with patch.object(router_module, "query_classification_chain", chain):
+            result = router_module.classify_query(
+                {
+                    "query": "你能做什么？",
+                    "short_term_context": (
+                        "[用户] 光刻机是什么\n"
+                        "[助手] 光刻机是芯片制造的关键设备。"
+                    ),
+                }
+            )
+
+        self.assertEqual(result["query_type"], "direct_response")
+        self.assertEqual(result["direct_response_kind"], "capabilities")
+        chain.invoke.assert_not_called()
+
+    def test_colloquial_pronoun_without_context_is_not_guessed(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content=(
+                '{"query_type":"direct_response",'
+                '"source_preference":"none","response_type":"answer",'
+                '"direct_response_kind":"capabilities",'
+                '"reason":"缺少可解析的会话指代"}'
+            )
+        )
+
+        with patch.object(router_module, "query_classification_chain", chain):
+            result = router_module.classify_query({"query": "他有什么用？"})
+
+        self.assertEqual(result["query_type"], "direct_response")
+        self.assertEqual(result["direct_response_kind"], "capabilities")
+
+    def test_non_json_colloquial_follow_up_uses_scoped_context_fallback(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(content="无法输出 JSON")
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            chain,
+        ), patch.object(router_module.log, "warning"):
+            result = router_module.classify_query(
+                {
+                    "query": "他现在主要用在哪里？",
+                    "short_term_context": (
+                        "[用户] EUV光刻机是什么\n"
+                        "[助手] EUV用于先进制程芯片制造。"
+                    ),
+                }
+            )
+
+        self.assertEqual(result["query_type"], "rag_qa")
+        self.assertEqual(result["source_preference"], "auto")
+        self.assertEqual(result["status"], "running")
 
     def test_classify_query_accepts_an_extra_closing_brace(self):
         import src.workflows.nodes.query_router as router_module
@@ -759,6 +963,84 @@ class QueryResponseTest(unittest.TestCase):
 
         self.assertEqual(result["report_data"], report_data)
         self.assertNotIn("evidence_records", result["details"])
+
+    def test_completed_selection_appends_report_history_without_losing_prior_reports(self):
+        from src.workflows.nodes.query_router import build_query_response
+
+        prior_report = {
+            "report_id": "previous-report",
+            "title": "上一份选型报告",
+            "created_at": "2026-08-22T12:00:00+00:00",
+            "format": "markdown",
+            "report": "# 上一份报告",
+            "report_path": None,
+        }
+
+        config = {"configurable": {"request_id": "selection-request-2"}}
+        result = build_query_response(
+            {
+                "query": "为手机选择半导体芯片",
+                "query_type": "technology_selection",
+                "source_preference": "auto",
+                "response_type": "report",
+                "status": "running",
+                "report_format": "markdown",
+                "report_history": [prior_report],
+                "child_graph_result": {
+                    "status": "completed",
+                    "report": "# 手机芯片选型报告",
+                    "report_data": {
+                        "requirements": {"business_goal": "手机芯片低功耗"},
+                    },
+                    "evidence_records": [],
+                },
+            },
+            config,
+        )
+
+        self.assertEqual(len(result["report_history"]), 2)
+        self.assertEqual(result["report_history"][0], prior_report)
+        self.assertEqual(
+            result["report_history"][1]["title"],
+            "手机芯片低功耗技术选型报告",
+        )
+        self.assertEqual(result["report_history"][1]["report"], "# 手机芯片选型报告")
+        self.assertEqual(result["report_history"][1]["report_id"], "selection-request-2")
+
+        replayed = build_query_response(
+            {
+                "query": "为手机选择半导体芯片",
+                "query_type": "technology_selection",
+                "source_preference": "auto",
+                "response_type": "report",
+                "status": "running",
+                "report_format": "markdown",
+                "report_history": result["report_history"],
+                "child_graph_result": {
+                    "status": "completed",
+                    "report": "# 手机芯片选型报告",
+                    "report_data": {
+                        "requirements": {"business_goal": "手机芯片低功耗"},
+                    },
+                    "evidence_records": [],
+                },
+            },
+            config,
+        )
+        self.assertEqual(replayed["report_history"], result["report_history"])
+
+        direct_result = build_query_response(
+            {
+                "query": "你好",
+                "query_type": "direct_response",
+                "source_preference": "none",
+                "response_type": "answer",
+                "status": "running",
+                "report_history": result["report_history"],
+                "direct_answer": "你好",
+            }
+        )
+        self.assertEqual(direct_result["report_history"], result["report_history"])
 
     def test_selection_response_exposes_original_query_and_clarifications(self):
         from src.workflows.nodes.query_router import build_query_response

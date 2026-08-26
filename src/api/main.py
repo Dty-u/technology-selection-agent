@@ -1,7 +1,7 @@
 """FastAPI application factory for the RAG agent backend."""
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager
 import os
 from typing import Any
 
@@ -13,6 +13,7 @@ from src.observability.logging import log
 from src.api.routes import router
 from src.api.service import (
     SessionBusyError,
+    SessionConflictError,
     SessionNotFoundError,
     SessionService,
 )
@@ -20,17 +21,26 @@ from src.api.service import (
 
 def create_app(
     *,
-    application_factory: Callable[[], AbstractContextManager[Any]] | None = None,
+    application_factory: Callable[
+        [], AbstractContextManager[Any] | AbstractAsyncContextManager[Any]
+    ] | None = None,
 ) -> FastAPI:
     """Build the API without opening external resources during import."""
     if application_factory is None:
-        from src.workflows.application import open_memory_application
+        from src.workflows.application import open_async_memory_application
 
-        application_factory = open_memory_application
+        application_factory = open_async_memory_application
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        with application_factory() as runner:
+        application_context = application_factory()
+        if hasattr(application_context, "__aenter__"):
+            async with application_context as runner:
+                app.state.runner = runner
+                app.state.session_service = SessionService(runner)
+                yield
+            return
+        with application_context as runner:
             app.state.runner = runner
             app.state.session_service = SessionService(runner)
             yield
@@ -54,11 +64,17 @@ def create_app(
         allow_origins=allowed_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-User-ID", "X-Request-ID"],
+        allow_headers=[
+            "Content-Type",
+            "X-User-ID",
+            "X-Request-ID",
+            "X-Thread-ID",
+        ],
+        expose_headers=["Content-Disposition"],
     )
 
     @app.get("/health/live", tags=["health"])
-    def health_live() -> dict[str, str]:
+    async def health_live() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.exception_handler(SessionNotFoundError)
@@ -87,6 +103,21 @@ def create_app(
                 "detail": {
                     "code": "session_busy",
                     "message": "session is already processing a message",
+                }
+            },
+        )
+
+    @app.exception_handler(SessionConflictError)
+    async def session_conflict_handler(
+        request: Request,
+        exc: SessionConflictError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": {
+                    "code": "session_conflict",
+                    "message": "session already exists",
                 }
             },
         )

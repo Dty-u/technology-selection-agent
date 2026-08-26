@@ -7,6 +7,7 @@ langchain-huggingface[full]==1.2.2
 langgraph==1.2.9
 langgraph-checkpoint-sqlite==3.1.1
 langgraph-checkpoint-mysql[pymysql]==3.0.0
+aiomysql==0.3.2
 langchain-milvus==0.3.3
 langchain-neo4j==0.10.0
 neo4j==6.0.3

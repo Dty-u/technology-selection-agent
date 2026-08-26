@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class _SemanticReader:
@@ -672,6 +672,195 @@ class MemoryAwareGraphTest(unittest.TestCase):
         second_payload = rag_graph.invoke.call_args_list[1].args[0]
         self.assertIn("EUV光刻机是什么", second_payload["question"])
         self.assertIn("它在哪里应用较多", second_payload["question"])
+
+    def test_same_thread_context_repairs_colloquial_follow_up_misclassified_as_capabilities(self):
+        import json
+
+        from langchain_core.messages import AIMessage
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        import src.workflows.nodes.query_router as router_module
+        from src.infrastructure.memory.repository import InMemoryMemoryRepository
+        from src.workflows.memory_runner import MemoryAwareRunner
+        from src.workflows.query_router_graph import build_query_router_graph
+
+        repository = InMemoryMemoryRepository()
+        graph = build_query_router_graph(
+            InMemorySaver(),
+            memory_repository=repository,
+        )
+        runner = MemoryAwareRunner(graph=graph, repository=repository)
+        classifier = MagicMock()
+        classifier.invoke.side_effect = [
+            AIMessage(
+                content=json.dumps(
+                    {
+                        "query_type": "rag_qa",
+                        "source_preference": "auto",
+                        "response_type": "answer",
+                        "reason": "半导体知识问答",
+                    },
+                    ensure_ascii=False,
+                )
+            ),
+            AIMessage(
+                content=json.dumps(
+                    {
+                        "query_type": "direct_response",
+                        "source_preference": "none",
+                        "response_type": "answer",
+                        "direct_response_kind": "capabilities",
+                        "reason": "误认为用户在询问助手能力",
+                    },
+                    ensure_ascii=False,
+                )
+            ),
+        ]
+        rag_graph = MagicMock()
+        rag_graph.invoke.side_effect = [
+            {
+                "generation": "光刻机用于把电路图形转移到晶圆上。",
+                "documents": [],
+                "retrieval_source": "local_hybrid",
+            },
+            {
+                "generation": "它用于芯片制造中的曝光和图形转移。",
+                "documents": [],
+                "retrieval_source": "local_hybrid",
+            },
+        ]
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            classifier,
+        ), patch.object(router_module, "rag_qa_graph", rag_graph):
+            runner.invoke(
+                {"query": "光刻机是什么"},
+                config=self._config(request_id="request-1"),
+            )
+            follow_up = runner.invoke(
+                {"query": "他有什么用"},
+                config=self._config(request_id="request-2"),
+            )
+
+        self.assertEqual(follow_up["query_type"], "rag_qa")
+        self.assertEqual(rag_graph.invoke.call_count, 2)
+        second_payload = rag_graph.invoke.call_args_list[1].args[0]
+        self.assertIn("光刻机是什么", second_payload["question"])
+        self.assertIn("他有什么用", second_payload["question"])
+
+    def test_current_semiconductor_question_overrides_prior_out_of_scope_turn(self):
+        import json
+
+        from langchain_core.messages import AIMessage
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        import src.workflows.nodes.query_router as router_module
+        from src.infrastructure.memory.repository import InMemoryMemoryRepository
+        from src.workflows.memory_runner import MemoryAwareRunner
+        from src.workflows.query_router_graph import build_query_router_graph
+
+        repository = InMemoryMemoryRepository()
+        graph = build_query_router_graph(
+            InMemorySaver(),
+            memory_repository=repository,
+        )
+        runner = MemoryAwareRunner(graph=graph, repository=repository)
+        classifier = MagicMock()
+        mistaken_direct = AIMessage(
+            content=json.dumps(
+                {
+                    "query_type": "direct_response",
+                    "source_preference": "none",
+                    "response_type": "answer",
+                    "direct_response_kind": "out_of_scope",
+                    "reason": "误受上一轮越界问题影响",
+                },
+                ensure_ascii=False,
+            )
+        )
+        classifier.invoke.side_effect = [mistaken_direct, mistaken_direct]
+        direct_chain = MagicMock()
+        direct_chain.invoke.return_value = AIMessage(content="超出半导体服务范围。")
+        rag_graph = MagicMock()
+        rag_graph.invoke.return_value = {
+            "generation": "半导体是导电能力介于导体与绝缘体之间的材料。",
+            "documents": [],
+            "retrieval_source": "local_hybrid",
+        }
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            classifier,
+        ), patch.object(
+            router_module,
+            "direct_response_chain",
+            direct_chain,
+        ), patch.object(router_module, "rag_qa_graph", rag_graph):
+            runner.invoke(
+                {"query": "李白是谁"},
+                config=self._config(request_id="request-1"),
+            )
+            result = runner.invoke(
+                {"query": "半导体是啥"},
+                config=self._config(request_id="request-2"),
+            )
+
+        self.assertEqual(result["query_type"], "rag_qa")
+        self.assertEqual(rag_graph.invoke.call_count, 1)
+        self.assertIn("半导体是啥", rag_graph.invoke.call_args.args[0]["question"])
+
+
+class MemoryAwareRunnerAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_astream_yields_values_and_records_interrupt_questions(self):
+        from types import SimpleNamespace
+
+        from src.workflows.memory_runner import MemoryAwareRunner
+
+        interrupt = SimpleNamespace(
+            value={
+                "status": "awaiting_user",
+                "clarification_questions": ["目标工艺节点是什么？"],
+            }
+        )
+
+        async def stream_values(*args, **kwargs):
+            yield {"query_type": "technology_selection"}
+            yield {"__interrupt__": (interrupt,)}
+
+        graph = MagicMock()
+        graph.astream.side_effect = stream_values
+        graph.aget_state = AsyncMock(
+            return_value=SimpleNamespace(values={"messages": []})
+        )
+        graph.aupdate_state = AsyncMock()
+        runner = MemoryAwareRunner(graph=graph)
+
+        chunks = [
+            chunk
+            async for chunk in runner.astream(
+                {"query": "帮我选择FinFET或GAA"},
+                config={
+                    "configurable": {
+                        "user_id": "user-a",
+                        "thread_id": "thread-a",
+                        "request_id": "request-a",
+                    }
+                },
+            )
+        ]
+
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[-1]["__interrupt__"], (interrupt,))
+        graph.astream.assert_called_once()
+        self.assertEqual(
+            graph.astream.call_args.kwargs["stream_mode"],
+            "values",
+        )
+        graph.aupdate_state.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

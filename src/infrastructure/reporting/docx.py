@@ -90,7 +90,13 @@ def _configure_page(document):
 
 def _plain_text(markdown_text):
     text = _LINK_PATTERN.sub(r"\1 (\2)", markdown_text)
-    return text.replace("**", "").replace("__", "").replace("`", "").strip()
+    return (
+        text.replace("**", "")
+        .replace("__", "")
+        .replace("`", "")
+        .replace(r"\|", "|")
+        .strip()
+    )
 
 
 def _add_paragraph(document, text, style=None):
@@ -100,11 +106,85 @@ def _add_paragraph(document, text, style=None):
     return paragraph
 
 
+def _split_table_row(line):
+    """Split one Markdown table row while preserving escaped pipe characters."""
+    content = line.strip()
+    if content.startswith("|"):
+        content = content[1:]
+    if content.endswith("|") and not content.endswith(r"\|"):
+        content = content[:-1]
+
+    cells = []
+    current = []
+    escaped = False
+    for character in content:
+        if escaped:
+            current.append(character)
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _is_table_separator(line):
+    cells = _split_table_row(line)
+    return bool(cells) and all(
+        re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
+        for cell in cells
+    )
+
+
+def _append_table(document, header_cells, rows):
+    column_count = len(header_cells)
+    table = document.add_table(rows=1, cols=column_count)
+    table.style = "Table Grid"
+    for index, value in enumerate(header_cells):
+        paragraph = table.rows[0].cells[index].paragraphs[0]
+        run = paragraph.add_run(_plain_text(value))
+        _set_run_font(run, bold=True)
+
+    for row in rows:
+        table_row = table.add_row()
+        for index in range(column_count):
+            value = row[index] if index < len(row) else ""
+            paragraph = table_row.cells[index].paragraphs[0]
+            run = paragraph.add_run(_plain_text(value))
+            _set_run_font(run)
+
+
 def _append_markdown(document, markdown):
     title_written = False
-    for raw_line in markdown.splitlines():
+    lines = markdown.splitlines()
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index]
         line = raw_line.strip()
         if not line:
+            index += 1
+            continue
+        if (
+            "|" in line
+            and index + 1 < len(lines)
+            and _is_table_separator(lines[index + 1].strip())
+        ):
+            header_cells = _split_table_row(line)
+            rows = []
+            index += 2
+            while index < len(lines):
+                row_line = lines[index].strip()
+                if not row_line or "|" not in row_line:
+                    break
+                rows.append(_split_table_row(row_line))
+                index += 1
+            _append_table(document, header_cells, rows)
             continue
         if line.startswith("### "):
             _add_paragraph(document, line[4:], "Heading 3")
@@ -124,6 +204,7 @@ def _append_markdown(document, markdown):
             paragraph.paragraph_format.right_indent = Inches(0.2)
         else:
             _add_paragraph(document, line)
+        index += 1
 
 
 def _safe_query_slug(query):

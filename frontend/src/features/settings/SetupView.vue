@@ -14,7 +14,7 @@ store.load()
 
 const form = reactive({
   apiBaseUrl:
-    store.settings?.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000',
+    store.settings?.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8100',
   userId: store.settings?.userId ?? '',
   projectId: store.settings?.projectId ?? '',
 })
@@ -64,7 +64,7 @@ function submit() {
           type="url"
           required
           spellcheck="false"
-          placeholder="http://localhost:8000"
+          placeholder="http://localhost:8100"
         />
         <p class="field-help">仅支持 HTTP(S)，末尾斜杠会自动整理。</p>
 

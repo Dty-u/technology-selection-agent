@@ -80,6 +80,7 @@ class QueryRouterOutput(TypedDict, total=False):
     report_data: Dict[str, Any]
     report_format: Literal["markdown", "docx"]
     report_path: Optional[str]
+    report_history: List[Dict[str, Any]]
     clarification_questions: List[str]
     clarification_answers: List[str]
     clarification_history: List[Dict[str, Any]]

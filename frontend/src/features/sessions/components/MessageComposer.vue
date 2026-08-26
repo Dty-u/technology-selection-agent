@@ -1,23 +1,36 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { FileText, SendHorizontal } from '@lucide/vue'
 
 const props = withDefaults(
   defineProps<{
     disabled?: boolean
     awaitingUser?: boolean
+    modelValue?: string
   }>(),
-  { disabled: false, awaitingUser: false },
+  { disabled: false, awaitingUser: false, modelValue: '' },
 )
 
 const emit = defineEmits<{
   submit: [message: string, wantsDocx: boolean]
+  'update:modelValue': [value: string]
 }>()
 
-const message = ref('')
+const textarea = ref<HTMLTextAreaElement | null>(null)
+const message = ref(props.modelValue)
 const wantsDocx = ref(false)
 const error = ref('')
 const count = computed(() => message.value.length)
+
+watch(
+  () => props.modelValue,
+  (value) => {
+    message.value = value
+    error.value = ''
+  },
+)
+
+watch(message, (value) => emit('update:modelValue', value))
 
 function submit() {
   const normalized = message.value.trim()
@@ -35,12 +48,18 @@ function submit() {
   message.value = ''
 }
 
+function focus() {
+  textarea.value?.focus()
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     submit()
   }
 }
+
+defineExpose({ focus })
 </script>
 
 <template>
@@ -48,6 +67,7 @@ function handleKeydown(event: KeyboardEvent) {
     <label class="sr-only" for="agent-message">消息</label>
     <textarea
       id="agent-message"
+      ref="textarea"
       v-model="message"
       :disabled="disabled"
       :placeholder="
@@ -63,10 +83,16 @@ function handleKeydown(event: KeyboardEvent) {
         需要 DOCX
       </label>
       <div class="composer__actions">
+        <span class="composer__shortcut" aria-hidden="true">Enter 发送 · Shift+Enter 换行</span>
         <span :class="['composer__count', { 'is-over': count > 10_000 }]">
           {{ count.toLocaleString() }} / 10,000
         </span>
-        <button class="composer__send" type="submit" :disabled="disabled || !message.trim()">
+        <button
+          class="composer__send"
+          type="submit"
+          aria-label="发送消息"
+          :disabled="disabled || !message.trim()"
+        >
           <span>发送</span>
           <SendHorizontal :size="17" aria-hidden="true" />
         </button>

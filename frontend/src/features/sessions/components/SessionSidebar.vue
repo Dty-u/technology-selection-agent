@@ -22,45 +22,48 @@ const emit = defineEmits<{
   <aside class="session-sidebar">
     <header class="workspace-brand">
       <div class="brand-mark"><CircuitBoard :size="20" aria-hidden="true" /></div>
-      <div><strong>Rag Agent</strong><span>DECISION LAB</span></div>
+      <div><strong>晶圆智选</strong><span>DECISION LAB</span></div>
     </header>
     <AppButton @click="emit('create')"><Plus :size="17" aria-hidden="true" /> 新建会话</AppButton>
     <div class="sidebar-section-heading">
       <span>本机会话</span><span>{{ sessions.length }}/20</span>
     </div>
-    <nav class="session-list" aria-label="本机会话">
-      <button
-        v-for="session in sessions"
-        :key="session.threadId"
-        type="button"
-        class="session-item"
-        :class="{ 'is-active': session.threadId === activeThreadId }"
-        @click="emit('select', session.threadId)"
-      >
-        <span class="session-item__line"
-          ><strong>{{ session.title }}</strong
-          ><MoreHorizontal :size="15" aria-hidden="true"
-        /></span>
-        <span>{{
-          new Date(session.updatedAt).toLocaleDateString('zh-CN', {
-            month: 'short',
-            day: 'numeric',
-          })
-        }}</span>
-        <StatusBadge :status="session.status" />
-        <span
-          class="session-item__remove"
-          role="button"
-          tabindex="0"
-          title="仅移除本机记录"
-          @click.stop="emit('removeLocal', session.threadId)"
-          @keydown.enter.stop="emit('removeLocal', session.threadId)"
-          ><Trash2 :size="13" aria-hidden="true"
-        /></span>
-      </button>
-      <p v-if="!sessions.length" class="empty-copy">
-        尚无本机会话。发出第一条消息后，thread_id 会保存在这里。
-      </p>
+    <nav class="session-sidebar__sessions" aria-label="本机会话">
+      <ul class="session-list">
+        <li v-for="session in sessions" :key="session.threadId" class="session-item">
+          <button
+            type="button"
+            class="session-item__select"
+            :class="{ 'is-active': session.threadId === activeThreadId }"
+            :aria-current="session.threadId === activeThreadId ? 'page' : undefined"
+            @click="emit('select', session.threadId)"
+          >
+            <span class="session-item__line"
+              ><strong>{{ session.title }}</strong
+              ><MoreHorizontal :size="15" aria-hidden="true"
+            /></span>
+            <span>{{
+              new Date(session.updatedAt).toLocaleDateString('zh-CN', {
+                month: 'short',
+                day: 'numeric',
+              })
+            }}</span>
+            <StatusBadge :status="session.status" />
+          </button>
+          <button
+            type="button"
+            class="session-item__remove"
+            :aria-label="`仅移除本机记录：${session.title}`"
+            title="仅移除本机记录"
+            @click="emit('removeLocal', session.threadId)"
+          >
+            <Trash2 :size="13" aria-hidden="true" />
+          </button>
+        </li>
+        <li v-if="!sessions.length" class="empty-copy">
+          尚无本机会话。发出第一条消息后，thread_id 会保存在这里。
+        </li>
+      </ul>
     </nav>
     <footer class="sidebar-footer">
       <div class="api-status">

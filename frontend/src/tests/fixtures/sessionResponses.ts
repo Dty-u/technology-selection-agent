@@ -16,6 +16,34 @@ export const completedRagResponse: SessionResponse = {
   sources: [{ title: 'FinFET Overview', url: 'https://example.com/finfet' }],
   warnings: [],
   report_url: null,
+  reports: [],
+  progress: {
+    request_id: '11111111-1111-4111-8111-111111111111',
+    active: false,
+    cancel_requested: false,
+    cancelled: false,
+    current_stage: null,
+    events: [
+      {
+        scope: '入口',
+        stage_id: 'classify_query',
+        label: '识别请求类型',
+        status: 'completed',
+        started_at: '2026-08-23T00:00:00+00:00',
+        finished_at: '2026-08-23T00:00:00.120000+00:00',
+        duration_ms: 120,
+      },
+      {
+        scope: '普通RAG',
+        stage_id: 'vector_retrieve',
+        label: '向量检索',
+        status: 'completed',
+        started_at: '2026-08-23T00:00:00.120000+00:00',
+        finished_at: '2026-08-23T00:00:00.380000+00:00',
+        duration_ms: 260,
+      },
+    ],
+  },
 }
 
 export const awaitingSelectionResponse: SessionResponse = {

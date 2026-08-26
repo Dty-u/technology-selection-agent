@@ -3873,6 +3873,43 @@ class DecisionNodeTest(unittest.TestCase):
             "insufficient_evidence",
         )
 
+    def test_malformed_recommendation_json_uses_evidence_score_fallback(self):
+        """A transient model format error must not discard verified scoring."""
+        import src.workflows.nodes.selection_decision as decision_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(content="暂时无法生成 JSON")
+        with patch.object(decision_module, "recommendation_chain", chain):
+            result = decision_module.generate_recommendation(
+                {
+                    "requirements": {},
+                    "feasible_candidates": [
+                        {"candidate_id": "hbm3", "name": "HBM3"},
+                        {"candidate_id": "hbm3e", "name": "HBM3E"},
+                    ],
+                    "evaluations": [
+                        {
+                            "candidate_id": "hbm3",
+                            "weighted_score": 4.1,
+                            "evidence_coverage": 1.0,
+                        },
+                        {
+                            "candidate_id": "hbm3e",
+                            "weighted_score": 4.6,
+                            "evidence_coverage": 1.0,
+                        },
+                    ],
+                    "risk_items": [],
+                    "evidence_gaps": [],
+                }
+            )
+
+        recommendation = result["recommendation"]
+        self.assertEqual(recommendation["decision"], "recommend")
+        self.assertEqual(recommendation["recommended_candidate_id"], "hbm3e")
+        self.assertEqual(recommendation["decision_basis"], "weighted_score")
+        self.assertIn("推荐结论模型返回格式异常", result["warnings"][0])
+
     def test_unconditional_recommendation_cannot_conflict_with_score_ranking(self):
         import src.workflows.nodes.selection_decision as decision_module
 

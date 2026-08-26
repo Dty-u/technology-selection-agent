@@ -20,6 +20,44 @@ class MessageRequest(BaseModel):
         return normalized
 
 
+class WorkflowStage(BaseModel):
+    scope: str
+    stage_id: str
+    label: str
+
+
+class WorkflowProgressEvent(WorkflowStage):
+    status: Literal["running", "completed", "paused", "error"]
+    started_at: str
+    finished_at: str | None = None
+    duration_ms: int | None = None
+
+
+class WorkflowProgress(BaseModel):
+    request_id: str | None = None
+    active: bool = False
+    cancel_requested: bool = False
+    cancelled: bool = False
+    current_stage: WorkflowStage | None = None
+    events: list[WorkflowProgressEvent] = Field(default_factory=list)
+
+
+class CancelSessionResponse(BaseModel):
+    """Acknowledgement for a cooperative cancellation request."""
+
+    thread_id: str
+    request_id: str | None = None
+    status: Literal["cancelling", "cancelled", "not_running"]
+
+
+class ReportSummary(BaseModel):
+    report_id: str
+    title: str
+    created_at: str
+    format: Literal["markdown", "docx"]
+    download_url: str
+
+
 class SessionResponse(BaseModel):
     """Frontend-safe view of one checkpointed agent session."""
 
@@ -31,6 +69,7 @@ class SessionResponse(BaseModel):
         "completed",
         "awaiting_user",
         "needs_human_review",
+        "cancelled",
         "error",
     ]
     query_type: Literal[
@@ -48,6 +87,8 @@ class SessionResponse(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     report_url: str | None = None
+    reports: list[ReportSummary] = Field(default_factory=list)
+    progress: WorkflowProgress = Field(default_factory=WorkflowProgress)
 
 
 class ErrorDetail(BaseModel):

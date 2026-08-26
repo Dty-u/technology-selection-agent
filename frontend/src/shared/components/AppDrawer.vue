@@ -1,8 +1,28 @@
 <script setup lang="ts">
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
 
-defineProps<{ open: boolean; title: string; side?: 'left' | 'right' }>()
+const props = defineProps<{ open: boolean; title: string; side?: 'left' | 'right' }>()
 const emit = defineEmits<{ close: [] }>()
+const closeButton = ref<HTMLButtonElement | null>(null)
+let previouslyFocused: HTMLElement | null = null
+
+watch(
+  () => props.open,
+  async (open, wasOpen) => {
+    if (open) {
+      previouslyFocused =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      await nextTick()
+      closeButton.value?.focus()
+      return
+    }
+    if (wasOpen) previouslyFocused?.focus()
+    previouslyFocused = null
+  },
+)
+
+onBeforeUnmount(() => previouslyFocused?.focus())
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') emit('close')
@@ -24,7 +44,13 @@ function onKeydown(event: KeyboardEvent) {
       >
         <header class="app-drawer__header">
           <strong>{{ title }}</strong>
-          <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">
+          <button
+            ref="closeButton"
+            class="icon-button"
+            type="button"
+            aria-label="关闭"
+            @click="emit('close')"
+          >
             <X :size="19" aria-hidden="true" />
           </button>
         </header>

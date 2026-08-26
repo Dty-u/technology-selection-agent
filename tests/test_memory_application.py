@@ -1,5 +1,5 @@
 import unittest
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from unittest.mock import MagicMock, patch
 
 
@@ -137,6 +137,45 @@ class MemoryApplicationTest(unittest.TestCase):
         self.assertIs(
             build_graph.call_args.kwargs["semantic_memory_reader"], reader
         )
+
+
+class AsyncMemoryApplicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_async_lifecycle_uses_async_checkpointer(self):
+        import src.workflows.application as application
+
+        checkpointer = MagicMock()
+        graph = MagicMock()
+
+        @asynccontextmanager
+        async def open_checkpointer(*args, **kwargs):
+            yield checkpointer
+
+        with patch.object(
+            application,
+            "WARMUP_ON_START",
+            False,
+        ), patch.object(
+            application,
+            "MySQLMemoryRepository",
+            return_value=MagicMock(),
+        ), patch.object(
+            application,
+            "MilvusMemoryIndex",
+            return_value=MagicMock(),
+        ), patch.object(
+            application,
+            "open_async_mysql_checkpointer",
+            side_effect=open_checkpointer,
+        ) as create_async_checkpointer, patch.object(
+            application,
+            "build_query_router_graph",
+            return_value=graph,
+        ) as build_graph:
+            async with application.open_async_memory_application() as runner:
+                self.assertIs(runner.graph, graph)
+
+        create_async_checkpointer.assert_called_once()
+        self.assertTrue(build_graph.call_args.kwargs["async_nodes"])
 
 
 if __name__ == "__main__":

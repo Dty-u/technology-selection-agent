@@ -1,9 +1,10 @@
 """Versioned HTTP routes for checkpointed agent sessions."""
 
 from typing import Annotated, Any
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Header, Response, status
 from fastapi.responses import FileResponse
 
 from src.api.dependencies import (
@@ -12,7 +13,7 @@ from src.api.dependencies import (
     require_project_id,
     require_user_id,
 )
-from src.api.schemas import MessageRequest, SessionResponse
+from src.api.schemas import CancelSessionResponse, MessageRequest, SessionResponse
 
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["sessions"])
@@ -28,23 +29,28 @@ Service = Annotated[Any, Depends(get_session_service)]
     response_model=SessionResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_session(
+async def create_session(
     project_id: ProjectId,
     message: MessageRequest,
     user_id: UserId,
     request_id: RequestId,
     service: Service,
+    x_thread_id: Annotated[
+        UUID | None,
+        Header(alias="X-Thread-ID"),
+    ] = None,
 ) -> SessionResponse:
-    return service.create_session(
+    return await service.create_session(
         user_id=user_id,
         project_id=project_id.strip(),
         request_id=request_id,
         message=message,
+        thread_id=str(x_thread_id) if x_thread_id is not None else None,
     )
 
 
 @router.post("/sessions/{thread_id}/messages", response_model=SessionResponse)
-def send_message(
+async def send_message(
     project_id: ProjectId,
     thread_id: UUID,
     message: MessageRequest,
@@ -52,7 +58,7 @@ def send_message(
     request_id: RequestId,
     service: Service,
 ) -> SessionResponse:
-    return service.send_message(
+    return await service.send_message(
         user_id=user_id,
         project_id=project_id.strip(),
         thread_id=str(thread_id),
@@ -62,13 +68,13 @@ def send_message(
 
 
 @router.get("/sessions/{thread_id}", response_model=SessionResponse)
-def get_session(
+async def get_session(
     project_id: ProjectId,
     thread_id: UUID,
     user_id: UserId,
     service: Service,
 ) -> SessionResponse:
-    return service.get_session(
+    return await service.get_session(
         user_id=user_id,
         project_id=project_id.strip(),
         thread_id=str(thread_id),
@@ -76,24 +82,72 @@ def get_session(
 
 
 @router.get("/sessions/{thread_id}/report", response_class=FileResponse)
-def download_report(
+async def download_report(
     project_id: ProjectId,
     thread_id: UUID,
     user_id: UserId,
     service: Service,
 ) -> FileResponse:
-    report_path = service.get_report_path(
+    report = await service.get_current_report_download(
         user_id=user_id,
         project_id=project_id.strip(),
         thread_id=str(thread_id),
     )
     return FileResponse(
-        path=report_path,
-        filename=report_path.name,
+        path=report.path,
+        filename=report.filename,
         media_type=(
             "application/vnd.openxmlformats-officedocument."
             "wordprocessingml.document"
         ),
+    )
+
+
+@router.post("/sessions/{thread_id}/cancel", response_model=CancelSessionResponse)
+async def cancel_session(
+    project_id: ProjectId,
+    thread_id: UUID,
+    user_id: UserId,
+    service: Service,
+) -> CancelSessionResponse:
+    return await service.cancel_session(
+        user_id=user_id,
+        project_id=project_id.strip(),
+        thread_id=str(thread_id),
+    )
+
+
+@router.get("/sessions/{thread_id}/reports/{report_id}")
+async def download_historical_report(
+    project_id: ProjectId,
+    thread_id: UUID,
+    report_id: str,
+    user_id: UserId,
+    service: Service,
+) -> Response:
+    report = await service.get_report_download(
+        user_id=user_id,
+        project_id=project_id.strip(),
+        thread_id=str(thread_id),
+        report_id=report_id,
+    )
+    if report.path is not None:
+        return FileResponse(
+            path=report.path,
+            filename=report.filename,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+        )
+    return Response(
+        content=report.content or "",
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename*=UTF-8''" + quote(report.filename)
+            )
+        },
     )
 
 
@@ -102,13 +156,13 @@ def download_report(
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
-def close_session(
+async def close_session(
     project_id: ProjectId,
     thread_id: UUID,
     user_id: UserId,
     service: Service,
 ) -> Response:
-    service.close_session(
+    await service.close_session(
         user_id=user_id,
         project_id=project_id.strip(),
         thread_id=str(thread_id),

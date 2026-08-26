@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest'
 import MessageComposer from '../MessageComposer.vue'
 
 describe('MessageComposer', () => {
+  it('updates its draft from a parent v-model value', async () => {
+    const wrapper = mount(MessageComposer, { props: { modelValue: '初始问题' } })
+
+    await wrapper.setProps({ modelValue: '补充后的完整问题' })
+
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('补充后的完整问题')
+  })
+
   it('submits with Enter and preserves Shift+Enter for multiline input', async () => {
     const wrapper = mount(MessageComposer)
     const textarea = wrapper.get('textarea')

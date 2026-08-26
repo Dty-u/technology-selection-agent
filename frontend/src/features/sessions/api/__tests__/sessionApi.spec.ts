@@ -58,6 +58,7 @@ describe('sessionApi', () => {
     const result = await api.createSession(
       { message: 'What is FinFET?', report_format: 'markdown' },
       '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
     )
 
     expect(result.answer).toBe('FinFET 使用鳍式沟道。')
@@ -67,6 +68,9 @@ describe('sessionApi', () => {
     expect(new Headers(init?.headers).get('X-User-ID')).toBe('user-a')
     expect(new Headers(init?.headers).get('X-Request-ID')).toBe(
       '11111111-1111-4111-8111-111111111111',
+    )
+    expect(new Headers(init?.headers).get('X-Thread-ID')).toBe(
+      '22222222-2222-4222-8222-222222222222',
     )
     expect(init?.body).toBe(
       JSON.stringify({ message: 'What is FinFET?', report_format: 'markdown' }),
@@ -131,6 +135,32 @@ describe('sessionApi', () => {
     ])
   })
 
+  it('requests scoped cooperative cancellation without deleting the session', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        thread_id: '22222222-2222-4222-8222-222222222222',
+        request_id: '33333333-3333-4333-8333-333333333333',
+        status: 'cancelling',
+      }),
+    )
+    const api = createSessionApi(
+      { apiBaseUrl: 'http://localhost:8000', userId: 'user-a', projectId: 'project-a' },
+      fetcher,
+    )
+
+    await expect(api.cancelSession('22222222-2222-4222-8222-222222222222')).resolves.toMatchObject({
+      status: 'cancelling',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/projects/project-a/sessions/22222222-2222-4222-8222-222222222222/cancel',
+      {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-User-ID': 'user-a' },
+        signal: undefined,
+      },
+    )
+  })
+
   it('downloads a report through authenticated fetch instead of a plain link', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('docx', {
@@ -157,5 +187,20 @@ describe('sessionApi', () => {
       'http://localhost:8000/api/v1/projects/project-a/sessions/22222222-2222-4222-8222-222222222222/report',
     )
     expect(new Headers(init?.headers).get('X-User-ID')).toBe('user-a')
+  })
+
+  it('uses the visible report title when the browser cannot read Content-Disposition', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('docx', { status: 200 }))
+    const api = createSessionApi(
+      { apiBaseUrl: 'http://localhost:8000', userId: 'user-a', projectId: 'project-a' },
+      fetcher,
+    )
+
+    const downloaded = await api.downloadReport(
+      '/api/v1/projects/project-a/sessions/22222222-2222-4222-8222-222222222222/reports/report-1',
+      '移动 SoC 技术选型.docx',
+    )
+
+    expect(downloaded.filename).toBe('移动 SoC 技术选型.docx')
   })
 })

@@ -1,7 +1,7 @@
 import type { QueryType, ReportData, SessionResponse, WorkflowStatus } from '../api/sessionSchemas'
 
 export type MessageRole = 'user' | 'assistant' | 'system'
-export type MessageDelivery = 'pending' | 'sent' | 'failed'
+export type MessageDelivery = 'pending' | 'sent' | 'cancelled' | 'failed'
 
 export type ChatMessage = {
   id: string
@@ -23,7 +23,7 @@ export type LocalSession = {
   messages: ChatMessage[]
 }
 
-export type SessionUiStatus = 'idle' | 'submitting' | WorkflowStatus | 'detached'
+export type SessionUiStatus = 'idle' | 'submitting' | 'cancelling' | WorkflowStatus
 
 export type ActiveSessionView = {
   record: LocalSession

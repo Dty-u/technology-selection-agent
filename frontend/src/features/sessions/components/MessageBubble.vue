@@ -1,10 +1,17 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Bot, CircleAlert, UserRound } from '@lucide/vue'
 
 import MarkdownContent from '@/shared/components/MarkdownContent.vue'
 import type { ChatMessage } from '../model/sessionTypes'
+import { compactEvidenceIndex } from './compactEvidenceIndex'
 
-defineProps<{ message: ChatMessage }>()
+const props = defineProps<{ message: ChatMessage }>()
+const visibleContent = computed(() =>
+  props.message.role === 'assistant'
+    ? compactEvidenceIndex(props.message.content)
+    : props.message.content,
+)
 </script>
 
 <template>
@@ -15,7 +22,7 @@ defineProps<{ message: ChatMessage }>()
     </div>
     <div class="message__body">
       <div class="message__meta">
-        <strong>{{ message.role === 'user' ? '你' : 'Rag Agent' }}</strong>
+        <strong>{{ message.role === 'user' ? '你' : '晶圆智选' }}</strong>
         <span>{{
           new Date(message.createdAt).toLocaleTimeString('zh-CN', {
             hour: '2-digit',
@@ -23,11 +30,15 @@ defineProps<{ message: ChatMessage }>()
           })
         }}</span>
       </div>
-      <MarkdownContent :content="message.content" />
-      <p v-if="message.delivery === 'pending'" class="message__delivery">正在发送…</p>
+      <MarkdownContent :content="visibleContent" />
+      <p v-if="message.delivery === 'pending'" class="message__delivery" role="status">正在发送…</p>
+      <p v-else-if="message.delivery === 'cancelled'" class="message__delivery" role="status">
+        本次请求已退出
+      </p>
       <p
         v-else-if="message.delivery === 'failed'"
         class="message__delivery message__delivery--failed"
+        role="alert"
       >
         <CircleAlert :size="14" aria-hidden="true" /> 本条消息发送失败
       </p>

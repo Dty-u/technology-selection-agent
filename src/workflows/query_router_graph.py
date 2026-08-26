@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from src.observability.logging import log
 from src.observability.workflow_progress import logged_node
+from src.workflows.async_node import async_node
 from src.workflows.nodes.query_router import (
     build_query_response,
     classify_query,
@@ -70,8 +71,16 @@ def _compile_router_graph(
     checkpointer=None,
     memory_repository=None,
     semantic_memory_reader=None,
+    *,
+    async_nodes: bool = False,
 ):
-    """Compile the router workflow with one technology-selection node."""
+    """Compile the router workflow with one technology-selection node.
+
+    ``async_nodes`` is enabled by the ASGI composition root.  It keeps legacy
+    synchronous subgraphs callable through ``invoke()`` while moving their
+    blocking provider calls out of FastAPI's event loop.
+    """
+    wrap_node = async_node if async_nodes else lambda node: node
     workflow = StateGraph(
         QueryRouterState,
         input_schema=QueryRouterInput,
@@ -79,53 +88,53 @@ def _compile_router_graph(
     )
     workflow.add_node(
         "prepare_short_term_memory",
-        prepare_short_term_memory,
+        wrap_node(prepare_short_term_memory),
     )
     workflow.add_node(
         "classify_query",
-        logged_node("入口", "classify_query", "识别请求类型", classify_query),
+        wrap_node(logged_node("入口", "classify_query", "识别请求类型", classify_query)),
     )
     workflow.add_node(
         "invoke_rag_qa",
-        logged_node(
+        wrap_node(logged_node(
             "入口",
             "invoke_rag_qa",
             "执行普通问答工作流",
             invoke_rag_qa,
             result_details=_child_status,
-        ),
+        )),
     )
     workflow.add_node(
         "invoke_technology_selection",
-        logged_node(
+        wrap_node(logged_node(
             "入口",
             "invoke_technology_selection",
             "执行技术选型工作流",
             invoke_selection_node,
             result_details=_child_status,
-        ),
+        )),
     )
     workflow.add_node(
         "respond_directly",
-        logged_node(
+        wrap_node(logged_node(
             "入口",
             "respond_directly",
             "生成直接响应",
             respond_directly,
-        ),
+        )),
     )
     workflow.add_node(
         "build_query_response",
-        logged_node(
+        wrap_node(logged_node(
             "入口",
             "build_query_response",
             "整理统一响应",
             build_query_response,
-        ),
+        )),
     )
     workflow.add_node(
         "finalize_short_term_memory",
-        finalize_short_term_memory,
+        wrap_node(finalize_short_term_memory),
     )
 
     workflow.add_edge(START, "prepare_short_term_memory")
@@ -151,15 +160,15 @@ def _compile_router_graph(
     else:
         workflow.add_node(
             "recall_memory",
-            make_recall_memory(memory_repository, semantic_memory_reader),
+            wrap_node(make_recall_memory(memory_repository, semantic_memory_reader)),
         )
         workflow.add_node(
             "stage_memory_candidates",
-            stage_memory_candidates,
+            wrap_node(stage_memory_candidates),
         )
         workflow.add_node(
             "persist_memory_candidates",
-            make_persist_memory_candidates(memory_repository),
+            wrap_node(make_persist_memory_candidates(memory_repository)),
         )
         workflow.add_conditional_edges(
             "classify_query",
@@ -203,6 +212,7 @@ def build_query_router_graph(
     *,
     memory_repository=None,
     semantic_memory_reader=None,
+    async_nodes: bool = False,
 ):
     """Compile the router with optional checkpoint and long-term memory adapters."""
     if checkpointer is None:
@@ -210,6 +220,7 @@ def build_query_router_graph(
             invoke_technology_selection,
             memory_repository=memory_repository,
             semantic_memory_reader=semantic_memory_reader,
+            async_nodes=async_nodes,
         )
     selection_graph = build_technology_selection_graph(checkpointer)
     return _compile_router_graph(
@@ -217,6 +228,7 @@ def build_query_router_graph(
         checkpointer=checkpointer,
         memory_repository=memory_repository,
         semantic_memory_reader=semantic_memory_reader,
+        async_nodes=async_nodes,
     )
 
 

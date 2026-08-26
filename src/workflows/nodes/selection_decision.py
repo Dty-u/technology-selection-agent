@@ -738,9 +738,25 @@ def generate_recommendation(state):
             ),
         }
     )
-    recommendation = RecommendationResult.model_validate(
-        parse_json_object(_response_content(response))
-    )
+    fallback_warning = ""
+    try:
+        recommendation = RecommendationResult.model_validate(
+            parse_json_object(_response_content(response))
+        )
+    except ValueError as exc:
+        # The model only supplies explanatory text here. The final candidate is
+        # derived below from assessed evidence, so malformed JSON must not
+        # discard a completed evidence and scoring workflow.
+        logger.warning(
+            "Recommendation JSON was invalid; using evidence-score fallback: %s",
+            type(exc).__name__,
+        )
+        recommendation = RecommendationResult(
+            decision="insufficient_evidence",
+        )
+        fallback_warning = (
+            "推荐结论模型返回格式异常，已根据已验证评分生成保守结论。"
+        )
     candidate_id_order = [
         candidate["candidate_id"]
         for candidate in state.get("feasible_candidates", [])
@@ -827,6 +843,12 @@ def generate_recommendation(state):
         dict.fromkeys(state.get("evidence_gaps", []))
     )
     result = {"recommendation": recommendation.model_dump()}
+    if fallback_warning:
+        result["warnings"] = list(
+            dict.fromkeys(
+                [*state.get("warnings", []), fallback_warning]
+            )
+        )
     set_selection_cache(
         "generate_recommendation",
         recommendation_chain,

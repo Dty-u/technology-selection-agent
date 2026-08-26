@@ -2,6 +2,7 @@
 
 import inspect
 from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from threading import Event, Thread
 from time import perf_counter
@@ -12,6 +13,39 @@ from src.observability.logging import log
 
 
 DEFAULT_HEARTBEAT_SECONDS = 30.0
+
+_progress_observer = ContextVar("workflow_progress_observer", default=None)
+
+
+@contextmanager
+def observe_progress(observer):
+    """Send safe node lifecycle events to one request-scoped observer."""
+    token = _progress_observer.set(observer)
+    try:
+        yield
+    finally:
+        _progress_observer.reset(token)
+
+
+def _notify_observer(observer, *, scope, stage_id, action, status, elapsed=None):
+    if observer is None:
+        return
+    event = {
+        "scope": str(scope),
+        "stage_id": str(stage_id),
+        "label": str(action),
+        "status": str(status),
+    }
+    if elapsed is not None:
+        event["duration_ms"] = max(0, round(elapsed * 1000))
+    try:
+        observer(event)
+    except Exception as exc:
+        log.warning(
+            "[工作流进度] 观察器失败 | stage_id={} | 异常类型={}",
+            stage_id,
+            type(exc).__name__,
+        )
 
 
 def _details_text(details):
@@ -97,12 +131,20 @@ def progress_stage(
     started_at = perf_counter()
     stopped = Event()
     stage = _ProgressStage()
+    observer = _progress_observer.get()
     log.info(
         "[{}][{}] 开始：{}{}",
         scope,
         stage_id,
         action,
         _details_text(details),
+    )
+    _notify_observer(
+        observer,
+        scope=scope,
+        stage_id=stage_id,
+        action=action,
+        status="running",
     )
 
     heartbeat_thread = None
@@ -136,6 +178,14 @@ def progress_stage(
             action,
             elapsed,
         )
+        _notify_observer(
+            observer,
+            scope=scope,
+            stage_id=stage_id,
+            action=action,
+            status="paused",
+            elapsed=elapsed,
+        )
         raise
     except BaseException as exc:
         elapsed = perf_counter() - started_at
@@ -147,6 +197,14 @@ def progress_stage(
             type(exc).__name__,
             elapsed,
         )
+        _notify_observer(
+            observer,
+            scope=scope,
+            stage_id=stage_id,
+            action=action,
+            status="error",
+            elapsed=elapsed,
+        )
         raise
     else:
         elapsed = perf_counter() - started_at
@@ -157,6 +215,14 @@ def progress_stage(
             action,
             _details_text(stage.result_details),
             elapsed,
+        )
+        _notify_observer(
+            observer,
+            scope=scope,
+            stage_id=stage_id,
+            action=action,
+            status="completed",
+            elapsed=elapsed,
         )
     finally:
         stopped.set()

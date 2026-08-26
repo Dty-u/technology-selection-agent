@@ -1,7 +1,7 @@
 """Lazy lifecycle helpers for the MySQL LangGraph checkpointer."""
 
 import re
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Iterator
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -76,6 +76,46 @@ def _load_pymysql_saver():
     return DatabaseCollationPyMySQLSaver
 
 
+def _load_aiomysql_saver():
+    """Load the async saver only for the ASGI application lifecycle."""
+    try:
+        from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
+    except ImportError as exc:
+        raise RuntimeError(
+            "MySQL async checkpoint dependency is missing; install aiomysql==0.3.2"
+        ) from exc
+
+    class DatabaseCollationAIOMySQLSaver(AIOMySQLSaver):
+        async def configure_database_collation(self) -> None:
+            async with self.conn.cursor() as cursor:
+                await cursor.execute("SELECT @@collation_database")
+                row = await cursor.fetchone()
+            if not row:
+                raise RuntimeError("unable to read MySQL database collation")
+            collation = (
+                row[0]
+                if not isinstance(row, dict)
+                else next(iter(row.values()))
+            )
+            normalized = str(collation or "").strip()
+            if not _COLLATION_NAME_PATTERN.fullmatch(normalized):
+                raise RuntimeError("invalid MySQL database collation")
+            self._checkpoint_database_collation = normalized
+
+        def _select_sql(self, where: str) -> str:
+            collation = getattr(self, "_checkpoint_database_collation", "")
+            if not collation:
+                raise RuntimeError(
+                    "MySQL checkpoint database collation is not configured"
+                )
+            return _apply_checkpoint_database_collation(
+                super()._select_sql(where),
+                collation,
+            )
+
+    return DatabaseCollationAIOMySQLSaver
+
+
 @contextmanager
 def open_mysql_checkpointer(
     database_uri: str | None = MYSQL_CHECKPOINT_URI,
@@ -99,6 +139,26 @@ def open_mysql_checkpointer(
         checkpointer.configure_database_collation()
         if setup:
             checkpointer.setup()
+        yield checkpointer
+
+
+@asynccontextmanager
+async def open_async_mysql_checkpointer(
+    database_uri: str | None = MYSQL_CHECKPOINT_URI,
+    *,
+    setup: bool = False,
+):
+    """Open the MySQL async saver used by LangGraph ``astream``."""
+    normalized_uri = str(database_uri or "").strip()
+    if not normalized_uri:
+        raise ValueError("MYSQL_CHECKPOINT_URI is required for checkpointed sessions")
+
+    saver_type = _load_aiomysql_saver()
+    async with saver_type.from_conn_string(normalized_uri) as checkpointer:
+        checkpointer.serde = JsonPlusSerializer(allowed_msgpack_modules=None)
+        await checkpointer.configure_database_collation()
+        if setup:
+            await checkpointer.setup()
         yield checkpointer
 
 

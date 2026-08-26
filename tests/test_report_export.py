@@ -16,6 +16,10 @@ class DocxReportExportTest(unittest.TestCase):
 
 - power: 5/5，功耗和能效更适合目标负载 [EPOWER01]
 - 来源：https://example.com/power
+
+| 指标 | GAA | FinFET |
+|---|---:|---:|
+| 功耗 | 5 | 3 |
 """
         output_directory = Path.cwd() / "runtime" / "reports"
         first_path = None
@@ -47,6 +51,11 @@ class DocxReportExportTest(unittest.TestCase):
                 for paragraph in document.paragraphs
                 if paragraph.text
             }
+            tables = [
+                [cell.text for cell in row.cells]
+                for table in document.tables
+                for row in table.rows
+            ]
         finally:
             for generated_path in (first_path, second_path):
                 if generated_path is not None and generated_path.exists():
@@ -58,6 +67,9 @@ class DocxReportExportTest(unittest.TestCase):
         self.assertIn("https://example.com/power", text)
         self.assertEqual(styles["候选评分"], "Heading 2")
         self.assertEqual(styles["GAA"], "Heading 3")
+        self.assertIn(["指标", "GAA", "FinFET"], tables)
+        self.assertIn(["功耗", "5", "3"], tables)
+        self.assertNotIn("| 指标 | GAA | FinFET |", text)
 
 
 if __name__ == "__main__":

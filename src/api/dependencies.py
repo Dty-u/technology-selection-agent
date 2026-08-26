@@ -6,11 +6,11 @@ from uuid import UUID, uuid4
 from fastapi import Header, HTTPException, Path, Request
 
 
-def get_session_service(request: Request) -> Any:
+async def get_session_service(request: Request) -> Any:
     return request.app.state.session_service
 
 
-def require_project_id(
+async def require_project_id(
     project_id: Annotated[str, Path(min_length=1, max_length=128)],
 ) -> str:
     normalized = project_id.strip()
@@ -19,7 +19,7 @@ def require_project_id(
     return normalized
 
 
-def require_user_id(
+async def require_user_id(
     x_user_id: Annotated[
         str | None,
         Header(alias="X-User-ID", min_length=1, max_length=128),
@@ -31,7 +31,7 @@ def require_user_id(
     return normalized
 
 
-def provide_request_id(
+async def provide_request_id(
     x_request_id: Annotated[
         str | None,
         Header(alias="X-Request-ID"),

@@ -10,7 +10,9 @@ import RequestNotice from '@/shared/components/RequestNotice.vue'
 import ConversationPane from '../components/ConversationPane.vue'
 import InspectorPanel from '../components/InspectorPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
+import { useWorkspacePanelResize } from '../composables/useWorkspacePanelResize'
 import { useSessionStore } from '../store/sessionStore'
+import type { ReportSummary } from '../api/sessionSchemas'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +21,18 @@ const store = useSessionStore()
 const leftDrawerOpen = ref(false)
 const rightDrawerOpen = ref(false)
 const settingsOpen = ref(false)
+const {
+  inspectorMaximum,
+  inspectorMinimum,
+  inspectorWidth,
+  layoutStyle,
+  sidebarMaximum,
+  sidebarMinimum,
+  sidebarWidth,
+  resetWidth,
+  resizeWithKeyboard,
+  startResize,
+} = useWorkspacePanelResize()
 
 const threadId = computed(() =>
   typeof route.params.threadId === 'string' ? route.params.threadId : null,
@@ -81,8 +95,11 @@ async function closeServerSession() {
   if (await store.closeActiveSession()) await router.push('/workspace')
 }
 
-async function downloadReport() {
-  const file = await store.downloadActiveReport()
+async function downloadReport(report?: ReportSummary) {
+  const fallbackFilename = report
+    ? `${report.title}.${report.format === 'docx' ? 'docx' : 'md'}`
+    : undefined
+  const file = await store.downloadReport(report?.download_url, fallbackFilename)
   if (!file) return
   const url = URL.createObjectURL(file.blob)
   const anchor = document.createElement('a')
@@ -102,7 +119,7 @@ function settingsSaved() {
 </script>
 
 <template>
-  <main class="workspace-view">
+  <main class="workspace-view" :style="layoutStyle">
     <div class="desktop-sidebar">
       <SessionSidebar
         :sessions="store.sessions"
@@ -113,6 +130,22 @@ function settingsSaved() {
         @settings="settingsOpen = true"
         @remove-local="removeLocal"
       />
+      <button
+        class="workspace-resizer workspace-resizer--left"
+        type="button"
+        role="separator"
+        aria-label="调整会话列表宽度"
+        aria-orientation="vertical"
+        :aria-valuemin="sidebarMinimum"
+        :aria-valuemax="Math.round(sidebarMaximum)"
+        :aria-valuenow="Math.round(sidebarWidth)"
+        title="拖动调整会话列表宽度；双击恢复默认"
+        @pointerdown="startResize('sidebar', $event)"
+        @keydown="resizeWithKeyboard('sidebar', $event)"
+        @dblclick="resetWidth('sidebar')"
+      >
+        <span aria-hidden="true"></span>
+      </button>
     </div>
     <section class="workspace-center">
       <header class="workspace-topbar">
@@ -120,11 +153,12 @@ function settingsSaved() {
           class="icon-button mobile-only"
           type="button"
           aria-label="打开会话列表"
+          title="打开会话列表"
           @click="leftDrawerOpen = true"
         >
           <PanelLeft :size="20" />
         </button>
-        <div>
+        <div class="workspace-topbar__identity">
           <span class="eyebrow">ACTIVE THREAD</span><strong>{{ workspaceTitle }}</strong>
         </div>
         <div class="topbar-actions">
@@ -133,6 +167,7 @@ function settingsSaved() {
             class="icon-button"
             type="button"
             aria-label="同步最新状态"
+            title="同步最新状态"
             @click="store.syncActiveSession"
           >
             <RefreshCw :size="18" />
@@ -142,6 +177,7 @@ function settingsSaved() {
             class="icon-button danger-action"
             type="button"
             aria-label="关闭服务端会话"
+            title="关闭服务端会话"
             @click="closeServerSession"
           >
             <Trash2 :size="18" />
@@ -150,6 +186,7 @@ function settingsSaved() {
             class="icon-button mobile-only"
             type="button"
             aria-label="打开证据检查器"
+            title="打开执行与证据面板"
             @click="rightDrawerOpen = true"
           >
             <PanelRight :size="20" />
@@ -168,13 +205,28 @@ function settingsSaved() {
         :status="store.uiStatus"
         :notice="store.notice"
         :in-flight="store.inFlight"
-        :can-stop="store.canStopWaiting"
+        :can-exit="store.canExitRequest"
         @submit="submit"
-        @stop="store.stopWaiting"
-        @sync="store.syncActiveSession"
+        @exit="store.exitCurrentRequest"
       />
     </section>
     <div class="desktop-inspector">
+      <button
+        class="workspace-resizer workspace-resizer--right"
+        type="button"
+        role="separator"
+        aria-label="调整检查器宽度"
+        aria-orientation="vertical"
+        :aria-valuemin="inspectorMinimum"
+        :aria-valuemax="Math.round(inspectorMaximum)"
+        :aria-valuenow="Math.round(inspectorWidth)"
+        title="拖动调整检查器宽度；双击恢复默认"
+        @pointerdown="startResize('inspector', $event)"
+        @keydown="resizeWithKeyboard('inspector', $event)"
+        @dblclick="resetWidth('inspector')"
+      >
+        <span aria-hidden="true"></span>
+      </button>
       <InspectorPanel
         :response="store.activeResponse"
         :report-data="store.reportData"
@@ -196,7 +248,7 @@ function settingsSaved() {
     </AppDrawer>
     <AppDrawer
       :open="rightDrawerOpen"
-      title="证据与结论"
+      title="执行、证据与结论"
       side="right"
       @close="rightDrawerOpen = false"
     >

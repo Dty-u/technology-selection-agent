@@ -14,6 +14,14 @@ describe('SetupView', () => {
     push.mockReset()
   })
 
+  it('defaults a new local workspace to the available backend port', () => {
+    const wrapper = mount(SetupView)
+
+    expect(wrapper.get<HTMLInputElement>('#api-base-url').element.value).toBe(
+      'http://localhost:8100',
+    )
+  })
+
   it('saves a valid local workspace and opens the conversation area', async () => {
     const wrapper = mount(SetupView)
     await wrapper.get('#api-base-url').setValue('http://localhost:8000/')

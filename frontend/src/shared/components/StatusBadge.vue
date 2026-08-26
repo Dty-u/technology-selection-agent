@@ -7,11 +7,12 @@ const labels: Record<SessionUiStatus, string> = {
   idle: '待命',
   submitting: '正在提交',
   running: '处理中',
+  cancelling: '正在退出',
   awaiting_user: '等待补充',
   completed: '已完成',
   needs_human_review: '需要复核',
+  cancelled: '已退出',
   error: '异常',
-  detached: '已停止等待',
 }
 </script>
 

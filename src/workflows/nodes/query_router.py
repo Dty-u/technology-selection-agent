@@ -1,6 +1,8 @@
 """Classification, child-graph invocation, and response normalization nodes."""
 
 import re
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.errors import GraphInterrupt
@@ -28,6 +30,12 @@ query_classification_prompt = ChatPromptTemplate.from_messages(
 5. 只有用户需要在具体业务目标、应用场景、优先级或约束下选择、推荐或采用半导体技术方案时，才使用query_type=technology_selection，source_preference=auto，response_type=report。
 6. 仅询问两个方案的原理、区别或一般优缺点，不属于技术选型；报告形式本身不代表技术选型。
 7. 只有决策对象属于半导体材料、器件、工艺或技术方案时，才能进入technology_selection；其他领域的比较属于out_of_scope。
+8. 当前用户问题优先于历史对话。历史中出现过越界问题，不代表当前明确的半导体问题也越界。
+对照示例：
+- “半导体是啥”“GAA 的工作原理是什么”“光刻机有什么用”属于 rag_qa。
+- “对比 FinFET 和 GAA 的工作原理”属于 rag_qa；只有结合场景或约束要求选择方案时才属于 technology_selection。
+- “你能回答半导体问题吗”属于 direct_response/capabilities。
+- “写一首关于半导体的诗”属于 direct_response/out_of_scope。
 只返回JSON：
 {{"query_type":"rag_qa","source_preference":"auto","response_type":"answer","direct_response_kind":null,"reason":"简短路由理由"}}。
 当 query_type=direct_response 时，direct_response_kind 只能是 identity、greeting、capabilities 或 out_of_scope。
@@ -181,15 +189,69 @@ _SEMICONDUCTOR_CONTEXT_TERMS = _SEMICONDUCTOR_SELECTION_TERMS + (
     "eda",
 )
 
+_SEMICONDUCTOR_KNOWLEDGE_TERMS = _SEMICONDUCTOR_SELECTION_TERMS + (
+    "mosfet",
+    "cmos",
+    "igbt",
+    "dram",
+    "sram",
+    "nand",
+    "hbm",
+    "asic",
+    "fpga",
+    "光刻机",
+    "光刻胶",
+    "刻蚀机",
+    "二极管",
+    "存储器",
+    "掩模版",
+    "掩膜版",
+    "eda",
+)
+
+_KNOWLEDGE_INTENT_PATTERN = re.compile(
+    r"是什么|是啥|啥是|什么意思|定义|概念|原理|工作机制|"
+    r"如何工作|怎么工作|有什么用|做什么用|有何用途|用来干什么|用途|"
+    r"区别|差异|优缺点|为什么|如何制造|怎么制造|有哪些|"
+    r"包括哪些|解释|介绍",
+    re.IGNORECASE,
+)
+
+_META_CAPABILITY_PATTERN = re.compile(
+    r"(?:你|您|助手|系统).{0,8}(?:能|会|可以|支持|擅长).{0,8}"
+    r"(?:回答|解答|处理|提供|帮|做)|"
+    r"(?:你|您|助手|系统).{0,8}(?:能力|功能|服务范围)",
+    re.IGNORECASE,
+)
+
+_KNOWLEDGE_REPORT_PATTERN = re.compile(
+    r"报告|综述|调研|白皮书|report|review|survey",
+    re.IGNORECASE,
+)
+
 _FOLLOW_UP_REFERENCE_PREFIXES = (
     "它",
+    "他",
+    "她",
     "这个",
     "这项",
     "这类",
+    "这种",
+    "那个",
     "该",
     "上述",
     "前述",
     "其",
+)
+
+_FOLLOW_UP_LEAD_IN_PREFIXES = (
+    "那么",
+    "那",
+    "所以",
+    "另外",
+    "还有",
+    "然后",
+    "请问",
 )
 
 _DIRECT_RESPONSE_TEMPLATES = {
@@ -260,6 +322,21 @@ def _is_explicit_technology_selection(query):
     )
 
 
+def _is_explicit_semiconductor_knowledge_query(query):
+    """Identify clear domain questions that cannot be an entry-only reply."""
+    normalized = " ".join(str(query or "").strip().lower().split())
+    if not normalized:
+        return False
+    if _OBVIOUS_OUT_OF_SCOPE_PATTERN.search(normalized):
+        return False
+    if _META_CAPABILITY_PATTERN.search(normalized):
+        return False
+    has_domain_term = any(
+        term in normalized for term in _SEMICONDUCTOR_KNOWLEDGE_TERMS
+    )
+    return has_domain_term and bool(_KNOWLEDGE_INTENT_PATTERN.search(normalized))
+
+
 def _requires_web_source(query):
     """Force Web only for clearly current facts, not historical wording."""
     normalized = str(query).strip()
@@ -293,6 +370,10 @@ def _is_semiconductor_pronoun_follow_up(query, short_term_context):
     """Recognize a same-session follow-up whose referent is semiconductor."""
     normalized_query = str(query or "").strip().lower()
     normalized_context = str(short_term_context or "").strip().lower()
+    for lead_in in _FOLLOW_UP_LEAD_IN_PREFIXES:
+        if normalized_query.startswith(lead_in):
+            normalized_query = normalized_query[len(lead_in) :].lstrip(" ，,")
+            break
     return bool(
         normalized_context
         and normalized_query.startswith(_FOLLOW_UP_REFERENCE_PREFIXES)
@@ -300,13 +381,43 @@ def _is_semiconductor_pronoun_follow_up(query, short_term_context):
     )
 
 
-def _short_term_follow_up_rag_classification(report_format):
+def _short_term_follow_up_rag_classification(
+    query,
+    report_format,
+    *,
+    classifier_output_invalid=False,
+):
+    warnings = []
+    if classifier_output_invalid:
+        warnings.append(
+            "分类模型未返回有效 JSON，已依据同会话半导体上下文按知识问答处理。"
+        )
     return {
         "query_type": "rag_qa",
-        "source_preference": "auto",
+        "source_preference": "web" if _requires_web_source(query) else "auto",
         "response_type": "answer",
         "report_format": report_format,
-        "routing_reason": "短期会话原文表明当前追问延续半导体主题，按知识问答处理",
+        "routing_reason": (
+            "短期会话原文表明当前指代追问延续半导体主题，"
+            "已覆盖不一致的入口分类结果"
+        ),
+        "status": "running",
+        "warnings": warnings,
+    }
+
+
+def _explicit_knowledge_rag_classification(query, report_format):
+    return {
+        "query_type": "rag_qa",
+        "source_preference": "web" if _requires_web_source(query) else "auto",
+        "response_type": (
+            "report" if _KNOWLEDGE_REPORT_PATTERN.search(str(query)) else "answer"
+        ),
+        "report_format": report_format,
+        "routing_reason": (
+            "当前问题包含明确的半导体知识意图，"
+            "已覆盖不一致的入口分类结果"
+        ),
         "status": "running",
         "warnings": [],
     }
@@ -405,6 +516,18 @@ def classify_query(state):
         if fallback is not None:
             log.warning("---查询类型识别未返回 JSON，降级为半导体知识问答---")
             return fallback
+        if _is_semiconductor_pronoun_follow_up(
+            state["query"],
+            state.get("short_term_context", ""),
+        ):
+            log.warning(
+                "---查询类型识别未返回 JSON，依据短期会话上下文降级为知识问答---"
+            )
+            return _short_term_follow_up_rag_classification(
+                state["query"],
+                report_format,
+                classifier_output_invalid=True,
+            )
         log.exception("---查询类型识别失败---")
         return {
             "query_type": None,
@@ -429,14 +552,30 @@ def classify_query(state):
             "warnings": ["暂时无法识别请求类型，请稍后重试。"],
         }
     if (
+        decision.query_type != "rag_qa"
+        and _is_explicit_semiconductor_knowledge_query(state["query"])
+    ):
+        log.warning(
+            "---入口分类与明确半导体知识意图冲突，覆盖为知识问答---"
+        )
+        return _explicit_knowledge_rag_classification(
+            state["query"],
+            report_format,
+        )
+    if (
         decision.query_type == "direct_response"
-        and decision.direct_response_kind == "out_of_scope"
         and _is_semiconductor_pronoun_follow_up(
             state["query"],
             state.get("short_term_context", ""),
         )
     ):
-        return _short_term_follow_up_rag_classification(report_format)
+        log.warning(
+            "---入口直答分类与短期会话指代冲突，覆盖为半导体知识问答---"
+        )
+        return _short_term_follow_up_rag_classification(
+            state["query"],
+            report_format,
+        )
     result = {
         "query_type": decision.query_type,
         "source_preference": (
@@ -674,7 +813,51 @@ def _export_report_if_requested(response):
     return response
 
 
-def build_query_response(state):
+def _append_selection_report(response, report_id=None):
+    """Archive one completed selection report in checkpointed session state."""
+    if (
+        response.get("query_type") != "technology_selection"
+        or response.get("response_type") != "report"
+        or response.get("status") not in {"completed", "needs_human_review"}
+        or not str(response.get("report", "")).strip()
+    ):
+        return response
+    requirements = response.get("report_data", {}).get("requirements", {})
+    business_goal = ""
+    if isinstance(requirements, dict):
+        business_goal = str(requirements.get("business_goal", "")).strip()
+    title = re.sub(r"\s+", " ", business_goal)
+    if title and not title.endswith("报告"):
+        title = (
+            f"{title}报告"
+            if title.endswith("技术选型")
+            else f"{title}技术选型报告"
+        )
+    if len(title) > 48:
+        title = f"{title[:48]}…"
+    normalized_report_id = str(report_id or "").strip() or uuid4().hex
+    history = list(response.get("report_history", []))
+    if any(
+        str(item.get("report_id", "") or "") == normalized_report_id
+        for item in history
+        if isinstance(item, dict)
+    ):
+        return response
+    response["report_history"] = [
+        *history,
+        {
+            "report_id": normalized_report_id,
+            "title": title or "技术选型报告",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "format": "docx" if response.get("report_path") else "markdown",
+            "report": response["report"],
+            "report_path": response.get("report_path"),
+        },
+    ]
+    return response
+
+
+def build_query_response(state, config=None):
     """Convert either child graph result into one JSON-safe response."""
     response = {
         "query": state.get("query", ""),
@@ -688,6 +871,7 @@ def build_query_response(state):
         "report_data": {},
         "report_format": state.get("report_format", "markdown"),
         "report_path": None,
+        "report_history": list(state.get("report_history", []) or []),
         "clarification_questions": [],
         "clarification_answers": [],
         "clarification_history": [],
@@ -783,4 +967,8 @@ def build_query_response(state):
     response["warnings"] = list(
         dict.fromkeys(response["warnings"] + result.get("warnings", []))
     )
-    return _export_report_if_requested(response)
+    configurable = dict((config or {}).get("configurable", {}) or {})
+    return _append_selection_report(
+        _export_report_if_requested(response),
+        report_id=configurable.get("request_id"),
+    )

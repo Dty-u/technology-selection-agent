@@ -5,6 +5,7 @@ const workflowStatusSchema = z.enum([
   'completed',
   'awaiting_user',
   'needs_human_review',
+  'cancelled',
   'error',
 ])
 
@@ -21,6 +22,42 @@ const sourceSchema = z
     source: z.string().optional(),
   })
   .passthrough()
+
+const workflowStageSchema = z.object({
+  scope: z.string(),
+  stage_id: z.string(),
+  label: z.string(),
+})
+
+const workflowProgressEventSchema = workflowStageSchema.extend({
+  status: z.enum(['running', 'completed', 'paused', 'error']),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+  duration_ms: z.number().int().nonnegative().nullable(),
+})
+
+const workflowProgressSchema = z.object({
+  request_id: z.string().nullable(),
+  active: z.boolean(),
+  cancel_requested: z.boolean().optional().default(false),
+  cancelled: z.boolean().optional().default(false),
+  current_stage: workflowStageSchema.nullable(),
+  events: z.array(workflowProgressEventSchema),
+})
+
+const cancelSessionResponseSchema = z.object({
+  thread_id: z.string(),
+  request_id: z.string().nullable(),
+  status: z.enum(['cancelling', 'cancelled', 'not_running']),
+})
+
+const reportSummarySchema = z.object({
+  report_id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+  format: z.enum(['markdown', 'docx']),
+  download_url: z.string(),
+})
 
 export const sessionResponseSchema = z
   .object({
@@ -39,6 +76,8 @@ export const sessionResponseSchema = z
     sources: z.array(sourceSchema),
     warnings: z.array(z.string()),
     report_url: z.string().nullable(),
+    reports: z.array(reportSummarySchema).default([]),
+    progress: workflowProgressSchema.optional(),
   })
   .passthrough()
 
@@ -191,11 +230,18 @@ export const reportDataSchema = z
 export type WorkflowStatus = z.infer<typeof workflowStatusSchema>
 export type QueryType = z.infer<typeof queryTypeSchema>
 export type SessionResponse = z.infer<typeof sessionResponseSchema>
+export type WorkflowProgress = z.infer<typeof workflowProgressSchema>
+export type CancelSessionResponse = z.infer<typeof cancelSessionResponseSchema>
+export type ReportSummary = z.infer<typeof reportSummarySchema>
 export type ReportData = z.infer<typeof reportDataSchema>
 export type SessionSource = z.infer<typeof sourceSchema>
 
 export function parseSessionResponse(value: unknown): SessionResponse {
   return sessionResponseSchema.parse(value)
+}
+
+export function parseCancelSessionResponse(value: unknown): CancelSessionResponse {
+  return cancelSessionResponseSchema.parse(value)
 }
 
 export function parseReportData(value: unknown): ReportData | null {
