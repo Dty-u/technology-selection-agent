@@ -21,6 +21,7 @@ venv/
 env/
 ENV/
 build/
+.pnpm-store/
 dist/
 *.egg-info/
 
@@ -30,7 +31,8 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Local tool caches
+.reasonix/
+
 # Runtime-generated output
-runtime/logs/
-runtime/reports/
-runtime/checkpoints/
+runtime/

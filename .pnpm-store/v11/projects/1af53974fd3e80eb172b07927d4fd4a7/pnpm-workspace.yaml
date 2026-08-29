@@ -1,2 +1,0 @@
-minimumReleaseAgeExclude:
-  - '@types/markdown-it@14.2.0'
