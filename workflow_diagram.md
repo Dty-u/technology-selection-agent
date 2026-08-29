@@ -67,11 +67,11 @@ graph TD
 
     analyze --> after{分析后路由<br/>route_after_analysis}
     after -->|"local / local_hybrid"| vec[vector_retrieve<br/>向量检索 Milvus]
-    after -->|"local / local_hybrid"| graph[graph_retrieve<br/>图谱检索 Neo4j]
+    after -->|"local / local_hybrid"| gre[graph_retrieve<br/>图谱检索 Neo4j]
     after -->|"web_search"| web
 
     vec --> merge[merge_retrieval_results<br/>融合检索结果]
-    graph --> merge
+    gre --> merge
     merge --> grade[grade_documents<br/>筛选相关证据]
 
     grade --> decide{证据决策<br/>decide_to_generate}
@@ -81,7 +81,7 @@ graph TD
 
     transform --> extract[extract_retrieval_intent<br/>抽取检索意图]
     extract --> vec
-    extract --> graph
+    extract --> gre
 
     web --> gen
 
@@ -94,7 +94,7 @@ graph TD
     eval -->|"无依据 且 生成重试≥2"| web
 
     style vec fill:#e8f5e9
-    style graph fill:#e8f5e9
+    style gre fill:#e8f5e9
     style gen fill:#fff9c4
     style web fill:#ffe0b2
 ```
