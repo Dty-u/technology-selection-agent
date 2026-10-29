@@ -28,10 +28,17 @@ class QueryRoutingDecision(BaseModel):
     source_preference: Literal["none", "auto", "web"]
     response_type: Literal["answer", "report"]
     direct_response_kind: Optional[
-        Literal["identity", "greeting", "capabilities", "out_of_scope"]
+        Literal[
+            "identity",
+            "greeting",
+            "acknowledgement",
+            "capabilities",
+            "out_of_scope",
+        ]
     ] = None
     reason: str
     retrieval_analysis: Optional[RetrievalAnalysis] = None
+    standalone_query: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_direct_response_contract(self):
@@ -49,6 +56,7 @@ class QueryRoutingDecision(BaseModel):
         self.direct_response_kind = None
         if self.query_type != "rag_qa":
             self.retrieval_analysis = None
+            self.standalone_query = None
         return self
 
 class QueryRouterInput(TypedDict):
@@ -95,10 +103,12 @@ class QueryRouterState(QueryRouterOutput, total=False):
     direct_response_kind: Literal[
         "identity",
         "greeting",
+        "acknowledgement",
         "capabilities",
         "out_of_scope",
     ]
     direct_answer: str
+    standalone_query: str
     child_graph_result: Dict[str, Any]
     messages: Annotated[List[AnyMessage], add_messages]
     session_user_id: str

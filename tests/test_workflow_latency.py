@@ -22,7 +22,11 @@ class DirectResponseLatencyTest(unittest.TestCase):
             )
 
         chain.invoke.assert_called_once_with(
-            {"direct_response_kind": "greeting", "query": "你好"}
+            {
+                "direct_response_kind": "greeting",
+                "query": "你好",
+                "short_term_context": "（无）",
+            }
         )
         self.assertEqual(result["direct_answer"], "你好，请问有什么半导体问题？")
         self.assertEqual(result["status"], "completed")
@@ -64,6 +68,7 @@ class DirectResponseLatencyTest(unittest.TestCase):
             {
                 "direct_response_kind": "out_of_scope",
                 "query": "帮我写一首关于海边的诗。",
+                "short_term_context": "（无）",
             }
         )
         rag_graph.invoke.assert_not_called()
@@ -195,7 +200,7 @@ class CombinedGenerationAssessmentTest(unittest.TestCase):
         }
 
     def test_valid_combined_assessment_uses_one_model_call(self):
-        from src.workflows.routes import evaluate_generation
+        from src.workflows.nodes import assess_generation as evaluate_generation
 
         assessment = SimpleNamespace(
             grounded="yes",
@@ -212,13 +217,10 @@ class CombinedGenerationAssessmentTest(unittest.TestCase):
             "answer_grader_chain",
         ) as legacy_answer:
             combined.invoke.return_value = assessment
-            route = (
-                evaluate_generation.grade_generation_v_documents_and_question(
-                    self._state()
-                )
-            )
+            result = evaluate_generation.assess_generation(self._state())
 
-        self.assertEqual(route, "useful")
+        self.assertEqual(result["generation_grounded"], "yes")
+        self.assertEqual(result["generation_answers_question"], "yes")
         combined.invoke.assert_called_once()
         legacy_grounded.invoke.assert_not_called()
         legacy_answer.invoke.assert_not_called()
@@ -234,7 +236,7 @@ class CombinedGenerationAssessmentTest(unittest.TestCase):
         self.assertIn('"grounded"', messages[0].content)
 
     def test_invalid_combined_assessment_falls_back_to_legacy_graders(self):
-        from src.workflows.routes import evaluate_generation
+        from src.workflows.nodes import assess_generation as evaluate_generation
 
         with patch.object(
             evaluate_generation,
@@ -253,13 +255,10 @@ class CombinedGenerationAssessmentTest(unittest.TestCase):
             legacy_answer.invoke.return_value = SimpleNamespace(
                 binary_score="yes"
             )
-            route = (
-                evaluate_generation.grade_generation_v_documents_and_question(
-                    self._state()
-                )
-            )
+            result = evaluate_generation.assess_generation(self._state())
 
-        self.assertEqual(route, "useful")
+        self.assertEqual(result["generation_grounded"], "yes")
+        self.assertEqual(result["generation_answers_question"], "yes")
         legacy_grounded.invoke.assert_called_once()
         legacy_answer.invoke.assert_called_once()
 
@@ -477,8 +476,10 @@ class GraphTopologyRegressionTest(unittest.TestCase):
                 "vector_retrieve",
                 "graph_retrieve",
                 "merge_retrieval_results",
+                "rerank_documents",
                 "grade_documents",
                 "generate",
+                "assess_generation",
                 "transform_query",
             },
         )
@@ -497,16 +498,18 @@ class GraphTopologyRegressionTest(unittest.TestCase):
                 ("extract_retrieval_intent", "vector_retrieve", False),
                 ("vector_retrieve", "merge_retrieval_results", False),
                 ("graph_retrieve", "merge_retrieval_results", False),
-                ("merge_retrieval_results", "grade_documents", False),
+                ("merge_retrieval_results", "rerank_documents", False),
+                ("rerank_documents", "grade_documents", False),
                 ("grade_documents", "generate", True),
                 ("grade_documents", "transform_query", True),
                 ("grade_documents", "web_search", True),
                 ("transform_query", "extract_retrieval_intent", False),
                 ("web_search", "generate", False),
-                ("generate", "__end__", True),
-                ("generate", "generate", True),
-                ("generate", "transform_query", True),
-                ("generate", "web_search", True),
+                ("generate", "assess_generation", False),
+                ("assess_generation", "__end__", True),
+                ("assess_generation", "generate", True),
+                ("assess_generation", "transform_query", True),
+                ("assess_generation", "web_search", True),
             },
         )
 

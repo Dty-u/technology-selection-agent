@@ -384,7 +384,11 @@ class MemoryAwareGraphTest(unittest.TestCase):
         self.assertTrue(any("thread_id" in warning for warning in rejected["warnings"]))
         self.assertNotIn("messages", rejected)
         direct_chain.invoke.assert_called_once_with(
-            {"direct_response_kind": "greeting", "query": "你好"}
+            {
+                "direct_response_kind": "greeting",
+                "query": "你好",
+                "short_term_context": "（无）",
+            }
         )
 
     def test_same_thread_rejects_a_different_project_without_exposing_messages(self):
@@ -593,7 +597,11 @@ class MemoryAwareGraphTest(unittest.TestCase):
 
         self.assertEqual(result["query_type"], "direct_response")
         direct_chain.invoke.assert_called_once_with(
-            {"direct_response_kind": "greeting", "query": "你好"}
+            {
+                "direct_response_kind": "greeting",
+                "query": "你好",
+                "short_term_context": "（无）",
+            }
         )
         self.assertEqual(repository.items, [])
         self.assertEqual(repository.outbox_events, [])
