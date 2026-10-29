@@ -876,6 +876,24 @@ class ApiContractTest(unittest.TestCase):
     def _application_factory():
         yield MagicMock()
 
+    def test_default_cors_allowlist_accepts_loopback_frontend_origin(self):
+        from src.api.main import create_app
+
+        with patch.dict(os.environ):
+            os.environ.pop("API_CORS_ORIGINS", None)
+            app = create_app(application_factory=self._application_factory)
+        with TestClient(app) as client:
+            response = client.get(
+                "/health/live",
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get("access-control-allow-origin"),
+            "http://127.0.0.1:3000",
+        )
+
     def test_cors_allowlist_and_openapi_include_the_public_contract(self):
         from src.api.main import create_app
 
