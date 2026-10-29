@@ -2962,7 +2962,7 @@ class DecisionNodeTest(unittest.TestCase):
         )
 
     def test_report_separates_scenario_and_fixed_metrics_without_none_values(self):
-        from src.workflows.nodes.selection_decision import generate_report
+        from src.workflows.nodes.selection_report import generate_report
 
         result = generate_report(
             {
@@ -3052,7 +3052,7 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertIn("来源未验证", report)
 
     def test_report_includes_original_request_and_clarification_rounds(self):
-        from src.workflows.nodes.selection_decision import (
+        from src.workflows.nodes.selection_report import (
             build_report_data,
             generate_report,
         )
@@ -3156,7 +3156,7 @@ class DecisionNodeTest(unittest.TestCase):
         )
 
     def test_report_without_clarification_shows_no_rounds(self):
-        from src.workflows.nodes.selection_decision import (
+        from src.workflows.nodes.selection_report import (
             build_report_data,
             generate_report,
         )
@@ -3185,7 +3185,7 @@ class DecisionNodeTest(unittest.TestCase):
         )
 
     def test_report_marks_inactive_fixed_criteria_without_creating_gaps(self):
-        from src.workflows.nodes.selection_decision import generate_report
+        from src.workflows.nodes.selection_report import generate_report
 
         result = generate_report(
             {
@@ -3238,7 +3238,7 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertNotIn("功耗与能效：本次未纳入评估", report)
 
     def test_report_semantically_deduplicates_candidate_metric_gaps(self):
-        from src.workflows.nodes.selection_decision import build_report_data
+        from src.workflows.nodes.selection_report import build_report_data
 
         report_data = build_report_data(
             {
@@ -3279,7 +3279,7 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertTrue(any("ALD量产中的具体挑战" in item for item in descriptions))
 
     def test_markdown_v2_is_a_standalone_user_facing_decision_report(self):
-        from src.workflows.nodes.selection_decision import generate_report
+        from src.workflows.nodes.selection_report import generate_report
 
         state = {
             "status": "needs_human_review",
@@ -3397,7 +3397,7 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertEqual(report.count("补充SiC在量产成熟度方面的可引用证据"), 1)
 
     def test_generate_report_returns_compact_structured_report_data(self):
-        from src.workflows.nodes.selection_decision import generate_report
+        from src.workflows.nodes.selection_report import generate_report
 
         result = generate_report(
             {
@@ -4292,7 +4292,7 @@ class DecisionNodeTest(unittest.TestCase):
         )
 
     def test_generate_report_contains_fixed_sections_and_evidence_references(self):
-        from src.workflows.nodes.selection_decision import generate_report
+        from src.workflows.nodes.selection_report import generate_report
 
         result = generate_report(
             {

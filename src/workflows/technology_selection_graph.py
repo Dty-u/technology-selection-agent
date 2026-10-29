@@ -13,7 +13,6 @@ from src.workflows.nodes.selection_decision import (
     analyze_risks,
     evaluate_candidates,
     generate_recommendation,
-    generate_report,
     review_recommendation,
 )
 from src.workflows.nodes.selection_evidence import (
@@ -21,6 +20,7 @@ from src.workflows.nodes.selection_evidence import (
     plan_evidence_tasks,
     retrieve_evidence,
 )
+from src.workflows.nodes.selection_report import generate_report
 from src.workflows.nodes.selection_requirements import (
     clarify_requirements,
     generate_candidates,
