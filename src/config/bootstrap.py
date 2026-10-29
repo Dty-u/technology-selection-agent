@@ -1,7 +1,10 @@
 from functools import lru_cache
 from time import monotonic
 
-from src.config.settings import RESOURCE_FAILURE_COOLDOWN_SECONDS
+from src.config.settings import (
+    RERANKER_ENABLED,
+    RESOURCE_FAILURE_COOLDOWN_SECONDS,
+)
 
 
 class ResourceFailureCooldown:
@@ -55,6 +58,14 @@ def get_graph_retriever():
     return create_graph_retriever()
 
 
+@lru_cache(maxsize=1)
+def get_reranker():
+    """Create the SiliconFlow reranker on first use and reuse it afterwards."""
+    from src.infrastructure.llm.reranker import create_reranker
+
+    return create_reranker()
+
+
 def warm_technology_selection_resources(semantic_memory_reader=None):
     """Warm reusable retrieval resources during host startup without mutation."""
     result = {}
@@ -72,6 +83,14 @@ def warm_technology_selection_resources(semantic_memory_reader=None):
     except Exception as error:
         result["graph"] = type(error).__name__
         mark_resource_failed("graph")
+    if RERANKER_ENABLED:
+        try:
+            get_reranker().warm()
+            result["reranker"] = "ready"
+            mark_resource_ready("reranker")
+        except Exception as error:
+            result["reranker"] = type(error).__name__
+            mark_resource_failed("reranker")
     if semantic_memory_reader is not None:
         try:
             result["memory"] = (

@@ -194,9 +194,7 @@ class RetrievalNodeTest(unittest.TestCase):
         )
 
     def test_merge_limits_each_branch_and_deduplicates_documents(self):
-        from src.workflows.nodes.merge_retrieval_results import (
-            merge_retrieval_results,
-        )
+        import src.workflows.nodes.merge_retrieval_results as merge_module
 
         vector_documents = [
             Document(
@@ -219,13 +217,16 @@ class RetrievalNodeTest(unittest.TestCase):
             ],
         ]
 
-        result = merge_retrieval_results(
-            {
-                "question": "Compare GAA and FinFET",
-                "vector_documents": vector_documents,
-                "graph_documents": graph_documents,
-            }
-        )
+        with patch.object(merge_module, "RETRIEVER_K", 4), patch.object(
+            merge_module, "GRAPH_MAX_DOCUMENTS", 4
+        ):
+            result = merge_module.merge_retrieval_results(
+                {
+                    "question": "Compare GAA and FinFET",
+                    "vector_documents": vector_documents,
+                    "graph_documents": graph_documents,
+                }
+            )
 
         self.assertEqual(
             [document.metadata["id"] for document in result["documents"]],

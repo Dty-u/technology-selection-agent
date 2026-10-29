@@ -22,6 +22,8 @@ class GraphState(TypedDict, total=False):
     vector_error: Optional[str]
     retrieval_error: Optional[str]
     generation_attempt_count: int
+    generation_grounded: Optional[Literal["yes", "no"]]
+    generation_answers_question: Optional[Literal["yes", "no"]]
     web_search_query: str
     web_search_queries: List[str]
     web_search_attempt_count: int

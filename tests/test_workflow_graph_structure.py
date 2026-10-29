@@ -9,6 +9,18 @@ from langchain_core.runnables import RunnableLambda
 
 
 class HybridWorkflowStructureTest(unittest.TestCase):
+    def setUp(self):
+        import src.workflows.nodes.assess_generation as assessment_module
+
+        # End-to-end cases drive the legacy graders; never reach the real model.
+        combined = MagicMock()
+        combined.invoke.side_effect = ValueError("use mocked legacy graders")
+        patcher = patch.object(
+            assessment_module, "generation_assessment_chain", combined
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_explicit_local_preference_overrides_a_web_analysis_decision(self):
         from src.workflows.routes.route_after_analysis import route_after_analysis
 
@@ -34,8 +46,10 @@ class HybridWorkflowStructureTest(unittest.TestCase):
                 "vector_retrieve",
                 "graph_retrieve",
                 "merge_retrieval_results",
+                "rerank_documents",
                 "grade_documents",
                 "generate",
+                "assess_generation",
                 "transform_query",
                 "extract_retrieval_intent",
                 "__end__",
@@ -53,11 +67,13 @@ class HybridWorkflowStructureTest(unittest.TestCase):
             ("analyze_question", "web_search", True),
             ("vector_retrieve", "merge_retrieval_results", False),
             ("graph_retrieve", "merge_retrieval_results", False),
-            ("merge_retrieval_results", "grade_documents", False),
+            ("merge_retrieval_results", "rerank_documents", False),
+            ("rerank_documents", "grade_documents", False),
             ("transform_query", "extract_retrieval_intent", False),
             ("extract_retrieval_intent", "vector_retrieve", False),
             ("extract_retrieval_intent", "graph_retrieve", False),
             ("web_search", "generate", False),
+            ("generate", "assess_generation", False),
         }
         self.assertTrue(expected_edges.issubset(edges), edges)
         self.assertNotIn(
@@ -71,7 +87,7 @@ class HybridWorkflowStructureTest(unittest.TestCase):
         import src.workflows.nodes.grade_documents as grade_documents_module
         import src.workflows.nodes.graph_retrieve as graph_retrieve_module
         import src.workflows.nodes.retrieve as retrieve_module
-        import src.workflows.routes.evaluate_generation as evaluation_module
+        import src.workflows.nodes.assess_generation as evaluation_module
         from src.workflows.rag_qa_graph import graph
 
         analysis_chain = MagicMock()
@@ -168,7 +184,7 @@ class HybridWorkflowStructureTest(unittest.TestCase):
         import src.workflows.nodes.analyze_question as analysis_module
         import src.workflows.nodes.generate as generate_module
         import src.workflows.nodes.web_search as web_search_module
-        import src.workflows.routes.evaluate_generation as evaluation_module
+        import src.workflows.nodes.assess_generation as evaluation_module
         from src.workflows.rag_qa_graph import graph
 
         analysis_chain = MagicMock()
@@ -234,7 +250,7 @@ class HybridWorkflowStructureTest(unittest.TestCase):
     def test_unhelpful_web_answer_triggers_one_precise_search_retry(self):
         import src.workflows.nodes.generate as generate_module
         import src.workflows.nodes.web_search as web_search_module
-        import src.workflows.routes.evaluate_generation as evaluation_module
+        import src.workflows.nodes.assess_generation as evaluation_module
         from src.workflows.rag_qa_graph import graph
 
         first_results = [
@@ -322,7 +338,7 @@ class HybridWorkflowStructureTest(unittest.TestCase):
     def test_two_unhelpful_web_answers_stop_without_a_third_provider_call(self):
         import src.workflows.nodes.generate as generate_module
         import src.workflows.nodes.web_search as web_search_module
-        import src.workflows.routes.evaluate_generation as evaluation_module
+        import src.workflows.nodes.assess_generation as evaluation_module
         from src.workflows.rag_qa_graph import graph
 
         results = [
@@ -403,7 +419,7 @@ class HybridWorkflowStructureTest(unittest.TestCase):
         import src.workflows.nodes.retrieve as retrieve_module
         import src.workflows.nodes.transform_query as transform_module
         import src.workflows.nodes.web_search as web_search_module
-        import src.workflows.routes.evaluate_generation as evaluation_module
+        import src.workflows.nodes.assess_generation as evaluation_module
         from src.workflows.rag_qa_graph import graph
 
         analysis_chain = MagicMock()

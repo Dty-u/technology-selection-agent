@@ -9,6 +9,8 @@ from pymilvus.client.types import MetricType, DataType, FunctionType
 from src.config.settings import (
     COLLECTION_NAME,
     MILVUS_URI,
+    RETRIEVER_FETCH_K,
+    RETRIEVER_HNSW_EF,
     RETRIEVER_K,
 )
 from src.infrastructure.llm.embeddings import bge_embedding
@@ -128,10 +130,20 @@ def create_retriever():
         function_type=FunctionType.RERANK,
         params={"reranker": "rrf", "k": 100},
     )
+    # HNSW rejects searches whose ef is smaller than the per-branch limit.
+    search_params = [
+        {
+            "metric_type": "IP",
+            "params": {"ef": max(RETRIEVER_HNSW_EF, RETRIEVER_FETCH_K)},
+        },
+        {"metric_type": "BM25", "params": {}},
+    ]
     return vector_store.vector_store_saved.as_retriever(
         search_type="similarity",
         search_kwargs={
             "k": RETRIEVER_K,
+            "fetch_k": RETRIEVER_FETCH_K,
+            "param": search_params,
             "reranker": rrf_reranker,
             "expr": 'category == "content"',
         },

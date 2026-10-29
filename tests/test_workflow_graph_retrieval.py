@@ -357,7 +357,7 @@ class BatchDocumentGradeTest(unittest.TestCase):
 
 class RetryGuardTest(unittest.TestCase):
     def test_answer_quality_is_checked_against_the_original_question(self):
-        import src.workflows.routes.evaluate_generation as evaluation_module
+        import src.workflows.nodes.assess_generation as assessment_module
 
         assessment = MagicMock()
         assessment.invoke.return_value = SimpleNamespace(
@@ -366,11 +366,11 @@ class RetryGuardTest(unittest.TestCase):
         )
 
         with patch.object(
-            evaluation_module,
+            assessment_module,
             "generation_assessment_chain",
             assessment,
         ):
-            route = evaluation_module.grade_generation_v_documents_and_question(
+            result = assessment_module.assess_generation(
                 {
                     "original_question": "半导体现在发展的速度快不快？",
                     "question": "2026年半导体市场增长率",
@@ -379,7 +379,8 @@ class RetryGuardTest(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(route, "useful")
+        self.assertEqual(result["generation_grounded"], "yes")
+        self.assertEqual(result["generation_answers_question"], "yes")
         assessment.invoke.assert_called_once_with(
             {
                 "documents": [Document(page_content="evidence")],
@@ -389,6 +390,7 @@ class RetryGuardTest(unittest.TestCase):
         )
 
     def test_accepted_generation_logs_evaluation_in_chinese(self):
+        import src.workflows.nodes.assess_generation as assessment_module
         import src.workflows.routes.evaluate_generation as evaluation_module
 
         assessment = MagicMock()
@@ -401,24 +403,24 @@ class RetryGuardTest(unittest.TestCase):
             lambda message: messages.append(str(message)),
             format="{message}",
         )
+        state = {
+            "question": "What is GAA?",
+            "documents": [Document(page_content="evidence")],
+            "generation": "answer",
+            "generation_attempt_count": 1,
+            "retrieval_source": "local_hybrid",
+        }
 
         try:
             with patch.object(
-                evaluation_module,
+                assessment_module,
                 "generation_assessment_chain",
                 assessment,
             ):
-                route = (
-                    evaluation_module.grade_generation_v_documents_and_question(
-                        {
-                            "question": "What is GAA?",
-                            "documents": [Document(page_content="evidence")],
-                            "generation": "answer",
-                            "generation_attempt_count": 1,
-                            "retrieval_source": "local_hybrid",
-                        }
-                    )
-                )
+                state.update(assessment_module.assess_generation(state))
+            route = evaluation_module.grade_generation_v_documents_and_question(
+                state
+            )
         finally:
             evaluation_module.log.remove(sink_id)
 
@@ -445,6 +447,27 @@ class RetryGuardTest(unittest.TestCase):
 
         self.assertEqual(result["generation"], "answer")
         self.assertEqual(result["generation_attempt_count"], 2)
+
+    def test_generate_prompt_forbids_explaining_pronoun_resolution(self):
+        import src.workflows.nodes.generate as generate_module
+
+        captured_prompts = []
+
+        def answer_llm(prompt):
+            captured_prompts.append(prompt.to_string())
+            return AIMessage(content="主要用于晶圆光刻。")
+
+        with patch.object(generate_module, "llm", RunnableLambda(answer_llm)):
+            generate_module.generate(
+                {
+                    "question": "光刻机主要应用在哪些方面",
+                    "documents": [Document(page_content="evidence")],
+                    "generation_attempt_count": 0,
+                }
+            )
+
+        self.assertIn("不要解释代词指代", captured_prompts[0])
+        self.assertIn("不要复述或改写用户的问题", captured_prompts[0])
 
     def test_generate_report_mode_passes_source_linked_report_context(self):
         import src.workflows.nodes.generate as generate_module
@@ -481,49 +504,35 @@ class RetryGuardTest(unittest.TestCase):
     def test_unsupported_generation_retries_then_falls_back(self):
         import src.workflows.routes.evaluate_generation as evaluation_module
 
-        assessment = MagicMock()
-        assessment.invoke.return_value = SimpleNamespace(
-            grounded="no",
-            answers_question="no",
+        route = evaluation_module.grade_generation_v_documents_and_question
+        unsupported = {
+            "question": "What is GAA?",
+            "generation": "answer",
+            "generation_grounded": "no",
+            "generation_answers_question": "no",
+        }
+
+        retry_route = route(
+            {
+                **unsupported,
+                "generation_attempt_count": 1,
+                "retrieval_source": "local_hybrid",
+            }
         )
-        with patch.object(
-            evaluation_module,
-            "generation_assessment_chain",
-            assessment,
-        ):
-            retry_route = (
-                evaluation_module.grade_generation_v_documents_and_question(
-                    {
-                        "question": "What is GAA?",
-                        "documents": [Document(page_content="evidence")],
-                        "generation": "answer",
-                        "generation_attempt_count": 1,
-                        "retrieval_source": "local_hybrid",
-                    }
-                )
-            )
-            web_route = (
-                evaluation_module.grade_generation_v_documents_and_question(
-                    {
-                        "question": "What is GAA?",
-                        "documents": [Document(page_content="evidence")],
-                        "generation": "answer",
-                        "generation_attempt_count": 2,
-                        "retrieval_source": "local_hybrid",
-                    }
-                )
-            )
-            end_route = (
-                evaluation_module.grade_generation_v_documents_and_question(
-                    {
-                        "question": "What is GAA?",
-                        "documents": [Document(page_content="web evidence")],
-                        "generation": "answer",
-                        "generation_attempt_count": 2,
-                        "retrieval_source": "web_search",
-                    }
-                )
-            )
+        web_route = route(
+            {
+                **unsupported,
+                "generation_attempt_count": 2,
+                "retrieval_source": "local_hybrid",
+            }
+        )
+        end_route = route(
+            {
+                **unsupported,
+                "generation_attempt_count": 2,
+                "retrieval_source": "web_search",
+            }
+        )
 
         self.assertEqual(retry_route, "generate")
         self.assertEqual(web_route, "web_search")
@@ -532,81 +541,87 @@ class RetryGuardTest(unittest.TestCase):
     def test_not_useful_generation_rewrites_then_falls_back(self):
         import src.workflows.routes.evaluate_generation as evaluation_module
 
-        assessment = MagicMock()
-        assessment.invoke.return_value = SimpleNamespace(
-            grounded="yes",
-            answers_question="no",
+        route = evaluation_module.grade_generation_v_documents_and_question
+        not_useful = {
+            "question": "What is GAA?",
+            "generation": "answer",
+            "generation_attempt_count": 1,
+            "generation_grounded": "yes",
+            "generation_answers_question": "no",
+        }
+
+        rewrite_route = route(
+            {
+                **not_useful,
+                "transform_count": 0,
+                "retrieval_source": "local_hybrid",
+            }
         )
-        with patch.object(
-            evaluation_module,
-            "generation_assessment_chain",
-            assessment,
-        ):
-            rewrite_route = (
-                evaluation_module.grade_generation_v_documents_and_question(
-                    {
-                        "question": "What is GAA?",
-                        "documents": [Document(page_content="evidence")],
-                        "generation": "answer",
-                        "generation_attempt_count": 1,
-                        "transform_count": 0,
-                        "retrieval_source": "local_hybrid",
-                    }
-                )
-            )
-            web_route = (
-                evaluation_module.grade_generation_v_documents_and_question(
-                    {
-                        "question": "What is GAA?",
-                        "documents": [Document(page_content="evidence")],
-                        "generation": "answer",
-                        "generation_attempt_count": 1,
-                        "transform_count": 2,
-                        "retrieval_source": "local_hybrid",
-                    }
-                )
-            )
-            exhausted_route = (
-                evaluation_module.grade_generation_v_documents_and_question(
-                    {
-                        "question": "What is GAA?",
-                        "documents": [Document(page_content="web evidence")],
-                        "generation": "answer",
-                        "generation_attempt_count": 1,
-                        "transform_count": 2,
-                        "retrieval_source": "web_search",
-                        "web_search_attempt_count": 2,
-                    }
-                )
-            )
+        web_route = route(
+            {
+                **not_useful,
+                "transform_count": 2,
+                "retrieval_source": "local_hybrid",
+            }
+        )
+        exhausted_route = route(
+            {
+                **not_useful,
+                "transform_count": 2,
+                "retrieval_source": "web_search",
+                "web_search_attempt_count": 2,
+            }
+        )
 
         self.assertEqual(rewrite_route, "transform_query")
         self.assertEqual(web_route, "web_search")
         self.assertEqual(exhausted_route, "web_search")
 
-    def test_retrieval_error_ends_without_running_answer_graders(self):
+    def test_routing_reads_stored_assessment_without_model_calls(self):
+        import src.workflows.nodes.assess_generation as assessment_module
         import src.workflows.routes.evaluate_generation as evaluation_module
 
         with patch.object(
-            evaluation_module,
-            "hallucination_grader_chain",
-        ) as hallucination_grader, patch.object(
-            evaluation_module,
-            "answer_grader_chain",
-        ) as answer_grader, patch.object(
-            evaluation_module,
-            "generation_assessment_chain",
+            assessment_module, "generation_assessment_chain"
         ) as assessment:
             route = evaluation_module.grade_generation_v_documents_and_question(
                 {
-                    "question": "目前GAA技术的量产进展如何？",
-                    "documents": [],
-                    "generation": "",
-                    "retrieval_error": "web_search_retry_exhausted",
+                    "question": "What is GAA?",
+                    "generation": "answer",
+                    "generation_grounded": "yes",
+                    "generation_answers_question": "yes",
                 }
             )
 
+        self.assertEqual(route, "useful")
+        assessment.invoke.assert_not_called()
+        self.assertFalse(hasattr(evaluation_module, "generation_assessment_chain"))
+
+    def test_retrieval_error_ends_without_running_answer_graders(self):
+        import src.workflows.nodes.assess_generation as assessment_module
+        import src.workflows.routes.evaluate_generation as evaluation_module
+
+        state = {
+            "question": "目前GAA技术的量产进展如何？",
+            "documents": [],
+            "generation": "",
+            "retrieval_error": "web_search_retry_exhausted",
+        }
+        with patch.object(
+            assessment_module,
+            "hallucination_grader_chain",
+        ) as hallucination_grader, patch.object(
+            assessment_module,
+            "answer_grader_chain",
+        ) as answer_grader, patch.object(
+            assessment_module,
+            "generation_assessment_chain",
+        ) as assessment:
+            state.update(assessment_module.assess_generation(state))
+        route = evaluation_module.grade_generation_v_documents_and_question(state)
+
         self.assertEqual(route, "end")
+        self.assertIsNone(state["generation_grounded"])
         assessment.invoke.assert_not_called()
         hallucination_grader.invoke.assert_not_called()
         answer_grader.invoke.assert_not_called()

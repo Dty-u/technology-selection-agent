@@ -1,5 +1,9 @@
 from src.observability.logging import log
-from src.config.settings import SELECTION_RELEVANCE_DOCUMENT_MAX_CHARACTERS
+from src.config.settings import (
+    RELEVANCE_DOCUMENT_MAX_CHARACTERS,
+    RELEVANCE_MAX_DOCUMENTS,
+    SELECTION_RELEVANCE_DOCUMENT_MAX_CHARACTERS,
+)
 from src.workflows.graders.document_relevance import (
     retrieval_grader_chain,
     selection_retrieval_grader_chain,
@@ -21,7 +25,7 @@ def grade_documents(state):
     question = state["question"]  # 获取用户问题
     documents = state["documents"]  # 获取待评估文档
 
-    candidates = documents[:6]
+    candidates = documents[:RELEVANCE_MAX_DOCUMENTS]
     if not candidates:
         log.info("---相关性筛选完成：保留证据 0 条---")
         return {"documents": [], "question": question}
@@ -29,7 +33,7 @@ def grade_documents(state):
     document_limit = (
         SELECTION_RELEVANCE_DOCUMENT_MAX_CHARACTERS
         if state.get("compact_relevance")
-        else 1000
+        else RELEVANCE_DOCUMENT_MAX_CHARACTERS
     )
     formatted_documents = "\n\n".join(
         f"[{index}] 来源：{document.metadata.get('source', '')}\n"

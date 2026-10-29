@@ -1,67 +1,16 @@
-from time import perf_counter
-
 from src.config.settings import MAX_GENERATION_ATTEMPTS, MAX_TRANSFORM_COUNT
 from src.observability.logging import log
-from src.workflows.graders.answer_quality import answer_grader_chain
-from src.workflows.graders.generation import generation_assessment_chain
-from src.workflows.graders.hallucination import hallucination_grader_chain
-
-
-def _legacy_assessment(*, documents, question, generation):
-    grounded_score = hallucination_grader_chain.invoke(
-        {"documents": documents, "generation": generation}
-    )
-    grounded = grounded_score.binary_score.strip().lower()
-    answers_question = "no"
-    if grounded == "yes":
-        answer_score = answer_grader_chain.invoke(
-            {"question": question, "generation": generation}
-        )
-        answers_question = answer_score.binary_score.strip().lower()
-    return grounded, answers_question
 
 
 def grade_generation_v_documents_and_question(state):
-    """Route an evaluated answer with bounded generation and rewrite attempts."""
-    started_at = perf_counter()
-    log.info("---检查生成回答是否基于检索证据---")
+    """Route on the stored answer assessment with bounded retry budgets."""
     if state.get("retrieval_error"):
         log.info("---评估决策：检索失败，结束工作流---")
         return "end"
-    question = state["question"]
-    evaluation_question = state.get("original_question") or question
-    documents = state["documents"]
-    generation = state["generation"]
 
-    try:
-        assessment = generation_assessment_chain.invoke(
-            {
-                "documents": documents,
-                "question": evaluation_question,
-                "generation": generation,
-            }
-        )
-        grounded = assessment.grounded.strip().lower()
-        answer_quality = assessment.answers_question.strip().lower()
-        if grounded not in {"yes", "no"} or answer_quality not in {"yes", "no"}:
-            raise ValueError("invalid combined generation assessment")
-    except Exception:
-        log.warning("---Combined answer assessment failed; using legacy graders---")
-        grounded, answer_quality = _legacy_assessment(
-            documents=documents,
-            question=evaluation_question,
-            generation=generation,
-        )
-    log.info(f"---幻觉评估：{'通过' if grounded == 'yes' else '未通过'}---")
-    if grounded == "yes":
-        log.info(
-            f"---问题解决评估：{'通过' if answer_quality == 'yes' else '未通过'}---"
-        )
-        if answer_quality == "yes":
+    if state.get("generation_grounded") == "yes":
+        if state.get("generation_answers_question") == "yes":
             log.info("---评估决策：接受回答---")
-            log.info(
-                f"---回答审核完成：耗时={perf_counter() - started_at:.2f}s---"
-            )
             return "useful"
         if state.get("retrieval_source") == "web_search":
             log.info("---评估决策：联网回答未解决问题，执行一次精准补检---")

@@ -17,6 +17,7 @@ with (_CONFIG_DIR / "config.yaml").open(encoding="utf-8") as config_file:
 
 
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
@@ -41,11 +42,25 @@ NEO4J_URI = _CONFIG["neo4j"]["uri"]
 NEO4J_USERNAME = _CONFIG["neo4j"]["username"]
 
 RETRIEVER_K = _CONFIG["retriever"]["k"]
+RETRIEVER_FETCH_K = _CONFIG["retriever"]["fetch_k"]
+RETRIEVER_HNSW_EF = _CONFIG["retriever"]["hnsw_ef"]
 
 GRAPH_MAX_HOPS = _CONFIG["graph_retriever"]["max_hops"]
 GRAPH_SEED_LIMIT = _CONFIG["graph_retriever"]["seed_limit"]
 GRAPH_PATH_LIMIT = _CONFIG["graph_retriever"]["path_limit"]
 GRAPH_MAX_DOCUMENTS = _CONFIG["graph_retriever"]["max_documents"]
+
+RERANKER_ENABLED = bool(_CONFIG["reranker"]["enabled"])
+RERANKER_MODEL_NAME = _CONFIG["reranker"]["model"]
+RERANKER_BASE_URL = _CONFIG["reranker"]["base_url"]
+RERANKER_TOP_N = _CONFIG["reranker"]["top_n"]
+RERANKER_TIMEOUT_SECONDS = _CONFIG["reranker"]["request_timeout_seconds"]
+RERANKER_MAX_RETRIES = _CONFIG["reranker"]["max_retries"]
+
+RELEVANCE_MAX_DOCUMENTS = _CONFIG["relevance"]["max_documents"]
+RELEVANCE_DOCUMENT_MAX_CHARACTERS = _CONFIG["relevance"][
+    "document_max_characters"
+]
 
 WEB_SEARCH_MAX_RESULTS = _CONFIG["web_search"]["max_results"]
 WEB_SEARCH_ENGINE = _CONFIG["web_search"]["search_engine"]

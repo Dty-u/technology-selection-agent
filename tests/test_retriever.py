@@ -85,6 +85,31 @@ class RetrieverConfigurationTest(unittest.TestCase):
             'category == "content"',
         )
 
+    def test_hybrid_search_fetches_more_per_branch_than_it_returns(self):
+        milvus = _import_milvus_with_fake_embeddings()
+        _FakeMilvusVectorSave.captured.clear()
+
+        with patch.object(milvus, "MilvusVectorSave", _FakeMilvusVectorSave):
+            milvus.create_retriever()
+
+        search_kwargs = _FakeMilvusVectorSave.captured["search_kwargs"]
+        self.assertEqual(search_kwargs["k"], milvus.RETRIEVER_K)
+        self.assertEqual(search_kwargs["fetch_k"], milvus.RETRIEVER_FETCH_K)
+        self.assertGreaterEqual(search_kwargs["fetch_k"], search_kwargs["k"])
+
+    def test_hnsw_ef_is_never_smaller_than_fetch_k(self):
+        milvus = _import_milvus_with_fake_embeddings()
+        _FakeMilvusVectorSave.captured.clear()
+
+        with patch.object(milvus, "MilvusVectorSave", _FakeMilvusVectorSave), patch.object(
+            milvus, "RETRIEVER_HNSW_EF", 10
+        ), patch.object(milvus, "RETRIEVER_FETCH_K", 40):
+            milvus.create_retriever()
+
+        dense, sparse = _FakeMilvusVectorSave.captured["search_kwargs"]["param"]
+        self.assertEqual(dense, {"metric_type": "IP", "params": {"ef": 40}})
+        self.assertEqual(sparse["metric_type"], "BM25")
+
     def test_similarity_retriever_uses_rrf_function_without_legacy_ranker_keys(self):
         milvus = _import_milvus_with_fake_embeddings()
         _FakeMilvusVectorSave.captured.clear()
@@ -164,10 +189,17 @@ class RetrieverConfigurationTest(unittest.TestCase):
             bootstrap,
             "get_graph_retriever",
             return_value=graph_retriever,
-        ) as get_graph_retriever:
+        ) as get_graph_retriever, patch.object(
+            bootstrap,
+            "get_reranker",
+            return_value=MagicMock(),
+        ) as get_reranker:
             result = bootstrap.warm_technology_selection_resources()
 
-        self.assertEqual(result, {"vector": "ready", "graph": "ready"})
+        self.assertEqual(
+            result, {"vector": "ready", "graph": "ready", "reranker": "ready"}
+        )
+        get_reranker.return_value.warm.assert_called_once_with()
         get_retriever.assert_called_once_with()
         get_graph_retriever.assert_called_once_with()
         graph_retriever._get_graph.assert_called_once_with()

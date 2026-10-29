@@ -2,6 +2,8 @@ from hashlib import sha256
 
 from langchain_core.documents import Document
 
+from src.config.settings import GRAPH_MAX_DOCUMENTS, RETRIEVER_K
+
 
 def _document_key(document) -> str:
     document_id = document.metadata.get("id")
@@ -16,8 +18,8 @@ def merge_retrieval_results(state):
     """Limit, deduplicate, and merge vector and graph evidence."""
     documents = []
     documents_by_key = {}
-    vector_documents = state.get("vector_documents", [])[:4]
-    graph_documents = state.get("graph_documents", [])[:4]
+    vector_documents = state.get("vector_documents", [])[:RETRIEVER_K]
+    graph_documents = state.get("graph_documents", [])[:GRAPH_MAX_DOCUMENTS]
 
     for source, branch_documents in (
         ("vector", vector_documents),

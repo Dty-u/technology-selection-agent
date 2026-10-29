@@ -21,6 +21,7 @@ class RetrievalGraphStructureTest(unittest.TestCase):
                 "vector_retrieve",
                 "graph_retrieve",
                 "merge_retrieval_results",
+                "rerank_documents",
                 "grade_documents",
                 "transform_query",
                 "extract_retrieval_intent",

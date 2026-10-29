@@ -23,13 +23,27 @@ neo4j:
   username: neo4j
 
 retriever:
-  k: 4
+  k: 10
+  fetch_k: 20
+  hnsw_ef: 64
 
 graph_retriever:
   max_hops: 2
   seed_limit: 5
   path_limit: 20
-  max_documents: 4
+  max_documents: 8
+
+reranker:
+  enabled: true
+  model: Qwen/Qwen3-VL-Reranker-8B
+  base_url: https://api.siliconflow.cn/v1
+  top_n: 6
+  request_timeout_seconds: 15
+  max_retries: 1
+
+relevance:
+  max_documents: 6
+  document_max_characters: 1000
 
 web_search:
   max_results: 5
