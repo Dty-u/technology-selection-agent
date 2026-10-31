@@ -1,7 +1,8 @@
 import type { QueryType, ReportData, SessionResponse, WorkflowStatus } from '../api/sessionSchemas'
 
 export type MessageRole = 'user' | 'assistant' | 'system'
-export type MessageDelivery = 'pending' | 'sent' | 'cancelled' | 'failed'
+// 'streaming' marks the live, never-persisted assistant draft.
+export type MessageDelivery = 'pending' | 'sent' | 'cancelled' | 'failed' | 'streaming'
 
 export type ChatMessage = {
   id: string
@@ -23,7 +24,7 @@ export type LocalSession = {
   messages: ChatMessage[]
 }
 
-export type SessionUiStatus = 'idle' | 'submitting' | 'cancelling' | WorkflowStatus
+export type SessionUiStatus = 'idle' | 'submitting' | 'cancelling' | 'unknown' | WorkflowStatus
 
 export type ActiveSessionView = {
   record: LocalSession

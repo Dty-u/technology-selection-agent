@@ -6,7 +6,12 @@ import { ApiError, apiErrorFromUnknown } from '@/shared/api/errors'
 import { createSessionApi } from '../api/sessionApi'
 import { parseReportData, type ReportData, type SessionResponse } from '../api/sessionSchemas'
 import type { ChatMessage, LocalSession, SessionUiStatus } from '../model/sessionTypes'
-import { loadSessionRecords, saveSessionRecords } from '../storage/sessionRepository'
+import {
+  isSessionImportDone,
+  loadSessionRecords,
+  markSessionImportDone,
+  saveSessionRecords,
+} from '../storage/sessionRepository'
 
 function newId(): string {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
@@ -74,6 +79,15 @@ function initialRunningResponse(
   }
 }
 
+function scheduleFrame(callback: () => void): () => void {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    const handle = globalThis.requestAnimationFrame(callback)
+    return () => globalThis.cancelAnimationFrame(handle)
+  }
+  const handle = globalThis.setTimeout(callback, 16)
+  return () => globalThis.clearTimeout(handle)
+}
+
 function waitForPoll(signal: AbortSignal, delayMs = 600): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
@@ -103,7 +117,12 @@ export const useSessionStore = defineStore('sessions', () => {
   const storageWarning = ref<string | null>(null)
   const apiReachable = ref<boolean | null>(null)
   const inFlight = ref(false)
+  const unknownStatusIds = ref(new Set<string>())
   const responsesByThreadId = new Map<string, SessionResponse>()
+  const streamingAnswer = ref<{ threadId: string; message: ChatMessage } | null>(null)
+  let pendingDelta = ''
+  let deltaFrameScheduled = false
+  let cancelDeltaFrame: (() => void) | null = null
   let currentController: AbortController | null = null
   let cancellationController: AbortController | null = null
   let activeRun: { threadId: string; requestId: string; cancellationRequested: boolean } | null =
@@ -112,7 +131,12 @@ export const useSessionStore = defineStore('sessions', () => {
   const activeSession = computed(
     () => sessions.value.find((session) => session.threadId === activeThreadId.value) ?? null,
   )
-  const visibleMessages = computed(() => activeSession.value?.messages ?? draftMessages.value)
+  const visibleMessages = computed(() => {
+    const messages = activeSession.value?.messages ?? draftMessages.value
+    const streaming = streamingAnswer.value
+    if (!streaming?.message.content || streaming.threadId !== activeThreadId.value) return messages
+    return [...messages, streaming.message]
+  })
   const canExitRequest = computed(
     () => inFlight.value && activeRun !== null && !activeRun.cancellationRequested,
   )
@@ -142,8 +166,125 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!settings) return
     const result = loadSessionRecords(localStorage, settings.userId, settings.projectId)
     sessions.value = result.value
+    unknownStatusIds.value = new Set()
     responsesByThreadId.clear()
     storageWarning.value = result.warning ?? null
+  }
+
+  // Browser records from before history moved to the backend are uploaded once.
+  async function importLocalSessions(
+    api: ReturnType<typeof createSessionApi>,
+    userId: string,
+    projectId: string,
+  ) {
+    if (isSessionImportDone(localStorage, userId, projectId)) return
+    const results = await Promise.allSettled(
+      sessions.value.map((record) =>
+        api.importSession({
+          thread_id: record.threadId,
+          title: record.title,
+          status: record.status,
+          created_at: record.createdAt,
+          updated_at: record.updatedAt,
+          messages: record.messages
+            .filter((message) => message.delivery === 'sent' || message.delivery === 'cancelled')
+            .map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              delivery: message.delivery,
+              created_at: message.createdAt,
+              ...(message.requestId ? { request_id: message.requestId } : {}),
+            })),
+        }),
+      ),
+    )
+    // Rejected records can never import, so only an outage is worth retrying.
+    const outage = results.some(
+      (result) =>
+        result.status === 'rejected' &&
+        !(
+          result.reason instanceof ApiError &&
+          result.reason.status >= 400 &&
+          result.reason.status < 500
+        ),
+    )
+    if (outage) throw new ApiError(0, 'import_failed', '本机会话暂时无法上传。')
+    markSessionImportDone(localStorage, userId, projectId)
+  }
+
+  async function syncFromBackend() {
+    const settings = settingsStore.settings
+    if (!settings) return false
+    const api = createSessionApi(settings)
+    try {
+      await api.ensureProject()
+      await importLocalSessions(api, settings.userId, settings.projectId)
+      const { sessions: stored } = await api.listSessions()
+      const local = new Map(sessions.value.map((record) => [record.threadId, record]))
+      const merged: LocalSession[] = stored.map((summary) => {
+        const record = local.get(summary.thread_id)
+        if (summary.thread_id === activeRun?.threadId && record) return record
+        return {
+          threadId: summary.thread_id,
+          userId: settings.userId,
+          projectId: settings.projectId,
+          title: summary.title,
+          createdAt: summary.created_at,
+          updatedAt: summary.updated_at,
+          status: summary.status,
+          messages: record?.messages ?? [],
+        }
+      })
+      // A session absent from the backend was deleted elsewhere, unless it is
+      // still being sent or failed before the backend ever stored it.
+      const stillLocal = sessions.value.filter(
+        (record) =>
+          !stored.some((summary) => summary.thread_id === record.threadId) &&
+          (record.threadId === activeRun?.threadId ||
+            record.messages.some((message) => message.delivery === 'failed')),
+      )
+      sessions.value = [...stillLocal, ...merged]
+      storageWarning.value = null
+      persist()
+      return true
+    } catch {
+      storageWarning.value = '暂时无法读取后端会话，当前显示本机缓存。'
+      return false
+    }
+  }
+
+  async function loadActiveMessages() {
+    const record = activeSession.value
+    const settings = settingsStore.settings
+    if (!record || !settings || record.threadId === activeRun?.threadId) return
+    let stored
+    try {
+      stored = await createSessionApi(settings).listMessages(record.threadId)
+    } catch {
+      // Sessions not stored yet, or an outage, keep whatever is cached locally.
+      return
+    }
+    if (record.threadId === activeRun?.threadId) return
+    const messages: ChatMessage[] = stored.messages
+      // Clarifications render as a card from the session response, not as bubbles.
+      .filter((message) => message.kind === 'message')
+      .map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.created_at,
+        delivery: message.delivery,
+        requestId: message.request_id,
+      }))
+    const storedRequestIds = new Set(messages.map((message) => message.requestId))
+    const undelivered = record.messages.filter(
+      (message) =>
+        message.delivery === 'failed' &&
+        !(message.requestId && storedRequestIds.has(message.requestId)),
+    )
+    record.messages = [...messages, ...undelivered]
+    persist()
   }
 
   function startNewSession() {
@@ -227,11 +368,65 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
+  function beginAnswerStream(threadId: string, requestId: string) {
+    endAnswerStream()
+    streamingAnswer.value = {
+      threadId,
+      message: {
+        id: newId(),
+        role: 'assistant',
+        content: '',
+        createdAt: now(),
+        delivery: 'streaming',
+        requestId,
+      },
+    }
+  }
+
+  function flushAnswerDelta() {
+    deltaFrameScheduled = false
+    cancelDeltaFrame = null
+    if (streamingAnswer.value) streamingAnswer.value.message.content += pendingDelta
+    pendingDelta = ''
+  }
+
+  function appendAnswerDelta(requestId: string, text: string) {
+    if (streamingAnswer.value?.message.requestId !== requestId) return
+    // Coalesce tokens per frame so Markdown re-renders at most once a frame.
+    pendingDelta += text
+    if (deltaFrameScheduled) return
+    deltaFrameScheduled = true
+    cancelDeltaFrame = scheduleFrame(flushAnswerDelta)
+  }
+
+  function discardPendingDelta() {
+    cancelDeltaFrame?.()
+    cancelDeltaFrame = null
+    deltaFrameScheduled = false
+    pendingDelta = ''
+  }
+
+  function resetAnswerStream(requestId: string) {
+    if (streamingAnswer.value?.message.requestId !== requestId) return
+    discardPendingDelta()
+    streamingAnswer.value.message.content = ''
+  }
+
+  function endAnswerStream(requestId?: string) {
+    if (requestId && streamingAnswer.value?.message.requestId !== requestId) return
+    discardPendingDelta()
+    streamingAnswer.value = null
+  }
+
   function applyResponse(record: LocalSession, response: SessionResponse) {
-    record.status = response.progress?.active ? 'running' : response.status
-    record.updatedAt = now()
+    const nextStatus = response.progress?.active ? 'running' : response.status
+    const statusChanged = record.status !== nextStatus
+    const messageCount = record.messages.length
+    record.status = nextStatus
     appendAssistant(record, response)
     reconcileRecoveredUserMessage(record, response)
+    // Merely syncing an unchanged session must not make it look recently active.
+    if (statusChanged || record.messages.length !== messageCount) record.updatedAt = now()
     cacheResponse(record, response)
   }
 
@@ -250,8 +445,9 @@ export const useSessionStore = defineStore('sessions', () => {
         if (response.progress?.request_id !== requestId) continue
         const record = sessions.value.find((session) => session.threadId === threadId)
         if (!record) return
-        record.status = response.progress.active ? 'running' : response.status
-        record.updatedAt = now()
+        const nextStatus = response.progress.active ? 'running' : response.status
+        if (record.status !== nextStatus) record.updatedAt = now()
+        record.status = nextStatus
         cacheResponse(record, response)
       } catch {
         if (signal.aborted) return
@@ -291,7 +487,7 @@ export const useSessionStore = defineStore('sessions', () => {
       record.updatedAt = now()
     } else {
       const createdAt = outgoing.createdAt
-      record = {
+      sessions.value.unshift({
         threadId: newId(),
         userId: settings.userId,
         projectId: settings.projectId,
@@ -300,8 +496,9 @@ export const useSessionStore = defineStore('sessions', () => {
         updatedAt: createdAt,
         status: 'running',
         messages: [outgoing],
-      }
-      sessions.value.unshift(record)
+      })
+      // Keep the reactive proxy: writes to the raw object would never reach the sidebar.
+      record = sessions.value[0]!
       activeThreadId.value = record.threadId
       draftMessages.value = []
     }
@@ -351,6 +548,11 @@ export const useSessionStore = defineStore('sessions', () => {
       requestId,
       progressController.signal,
     )
+    beginAnswerStream(record.threadId, requestId)
+    const answerHandlers = {
+      onReset: () => resetAnswerStream(requestId),
+      onDelta: (text: string) => appendAnswerDelta(requestId, text),
+    }
 
     try {
       const payload = {
@@ -358,11 +560,24 @@ export const useSessionStore = defineStore('sessions', () => {
         report_format: wantsDocx ? 'docx' : 'markdown',
       } as const
       const response = existing
-        ? await api.sendMessage(record.threadId, payload, requestId, currentController.signal)
-        : await api.createSession(payload, requestId, record.threadId, currentController.signal)
+        ? await api.sendMessageStream(
+            record.threadId,
+            payload,
+            requestId,
+            answerHandlers,
+            currentController.signal,
+          )
+        : await api.createSessionStream(
+            payload,
+            requestId,
+            record.threadId,
+            answerHandlers,
+            currentController.signal,
+          )
 
       progressController.abort()
       await progressTask
+      endAnswerStream(requestId)
 
       if (!existing && response.thread_id !== record.threadId) {
         throw new ApiError(502, 'thread_id_mismatch', '服务端返回的会话标识与本次请求不一致。')
@@ -397,10 +612,14 @@ export const useSessionStore = defineStore('sessions', () => {
       notice.value = apiError
       setOutgoingDelivery('failed')
       uiStatus.value = 'error'
+      // A 409 means the server is still working, so the running status stays accurate.
+      if (apiError.status !== 409) record.status = 'error'
+      record.updatedAt = now()
       persist()
       return activeThreadId.value
     } finally {
       progressController.abort()
+      endAnswerStream(requestId)
       if (activeRun?.requestId === requestId && !activeRun.cancellationRequested) {
         activeRun = null
         inFlight.value = false
@@ -486,12 +705,59 @@ export const useSessionStore = defineStore('sessions', () => {
     try {
       const response = await api.getSession(record.threadId)
       applyResponse(record, response)
+      unknownStatusIds.value.delete(record.threadId)
       persist()
     } catch (error) {
       if (activeThreadId.value !== record.threadId) return
       notice.value = apiErrorFromUnknown(error)
       uiStatus.value = 'error'
     }
+  }
+
+  // Records left "running" by a closed tab or an older build would otherwise never update.
+  async function refreshRunningSessions() {
+    const settings = settingsStore.settings
+    if (!settings) return
+    const api = createSessionApi(settings)
+    const running = sessions.value.filter(
+      (session) => session.status === 'running' && session.threadId !== activeRun?.threadId,
+    )
+    await Promise.all(
+      running.map(async (record) => {
+        try {
+          const response = await api.getSession(record.threadId)
+          if (record.threadId === activeRun?.threadId) return
+          applyResponse(record, response)
+          unknownStatusIds.value.delete(record.threadId)
+        } catch {
+          unknownStatusIds.value.add(record.threadId)
+        }
+      }),
+    )
+    if (running.length) persist()
+  }
+
+  function discardFailedMessage(messageId: string) {
+    const record = activeSession.value
+    if (!record || inFlight.value) return false
+    const message = record.messages.find((item) => item.id === messageId)
+    if (message?.delivery !== 'failed') return false
+    record.messages = record.messages.filter((item) => item.id !== messageId)
+    notice.value = null
+    if (record.messages.length) {
+      uiStatus.value = record.status
+      persist()
+    } else {
+      // Nothing else was delivered, so the local record has nothing left to keep.
+      removeLocalSession(record.threadId)
+    }
+    return true
+  }
+
+  async function retryFailedMessage(messageId: string, wantsDocx: boolean) {
+    const message = activeSession.value?.messages.find((item) => item.id === messageId)
+    if (!message || !discardFailedMessage(messageId)) return activeThreadId.value
+    return submit(message.content, wantsDocx)
   }
 
   async function checkHealth() {
@@ -552,12 +818,18 @@ export const useSessionStore = defineStore('sessions', () => {
     apiReachable,
     inFlight,
     canExitRequest,
+    unknownStatusIds,
     initialize,
+    syncFromBackend,
+    loadActiveMessages,
     startNewSession,
     selectSession,
     submit,
     exitCurrentRequest,
     syncActiveSession,
+    refreshRunningSessions,
+    discardFailedMessage,
+    retryFailedMessage,
     checkHealth,
     removeLocalSession,
     closeActiveSession,

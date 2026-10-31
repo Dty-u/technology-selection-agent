@@ -82,6 +82,12 @@ def _selection_details(result):
     return details
 
 
+_NO_RELEVANT_EVIDENCE_ANSWER = (
+    "我暂时没有找到足以回答这个问题的可靠资料，所以先不给出猜测的答案。"
+    "你可以补充更具体的对象或背景，比如具体的芯片、器件或工艺名称，我再帮你查。"
+)
+
+
 def _export_report_if_requested(response):
     if response["report_format"] != "docx":
         return response
@@ -189,13 +195,20 @@ def build_query_response(state, config=None):
     if state.get("query_type") == "rag_qa":
         retrieval_error = result.get("retrieval_error")
         if retrieval_error:
-            response["status"] = "error"
+            # Finding nothing relevant is a normal outcome the user can act on;
+            # only an unavailable retrieval service is an error.
+            no_relevant_evidence = retrieval_error in {
+                "web_search_no_relevant_results",
+                "web_search_retry_exhausted",
+            }
+            if no_relevant_evidence:
+                response["status"] = "completed"
+                response["answer"] = _NO_RELEVANT_EVIDENCE_ANSWER
+            else:
+                response["status"] = "error"
             warning = (
                 "未取得足以回答问题的相关资料。"
-                if retrieval_error in {
-                    "web_search_no_relevant_results",
-                    "web_search_retry_exhausted",
-                }
+                if no_relevant_evidence
                 else "未获取到可用检索证据，无法生成可验证的回答。"
             )
             response["warnings"] = list(

@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { nextTick } from 'vue'
+import { describe, expect, it, vi } from 'vitest'
 
 import SourcesPanel from '../SourcesPanel.vue'
 
@@ -35,6 +36,45 @@ describe('SourcesPanel', () => {
       rel: 'noopener noreferrer',
     })
     expect(wrapper.text()).toContain('危险来源')
+  })
+
+  it('shows a local document by file name and hides empty excerpts', () => {
+    const path = 'D:\\Mydocs\\rag_md\\md\\tech_report_99duun4t.md'
+    const wrapper = mount(SourcesPanel, {
+      props: { sources: [{ title: '', url: path, source: path }] },
+    })
+
+    expect(wrapper.get('.source-card strong').text()).toBe('tech_report_99duun4t.md')
+    expect(wrapper.get('.source-card strong').attributes('title')).toBe(path)
+    expect(wrapper.text()).toContain('本地文档')
+    expect(wrapper.find('.source-card p').exists()).toBe(false)
+    expect(wrapper.find('.unsafe-link-note').exists()).toBe(false)
+  })
+
+  it('highlights and reveals the source a citation points to', async () => {
+    const scrollIntoView = vi.fn<() => void>()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const wrapper = mount(SourcesPanel, {
+      props: { sources: [{ title: '甲' }, { title: '乙' }], focus: null },
+    })
+    ;(wrapper.get('details').element as HTMLDetailsElement).open = false
+
+    await wrapper.setProps({ focus: { index: 1, key: 1 } })
+    await nextTick()
+
+    expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(true)
+    expect(wrapper.findAll('.source-card')[1]?.classes()).toContain('is-focused')
+    expect(wrapper.findAll('.source-card')[0]?.classes()).not.toContain('is-focused')
+    expect(scrollIntoView).toHaveBeenCalled()
+  })
+
+  it('reveals a citation chosen before the panel mounted, as in the mobile drawer', async () => {
+    const wrapper = mount(SourcesPanel, {
+      props: { sources: [{ title: '甲' }, { title: '乙' }], focus: { index: 1, key: 1 } },
+    })
+    await nextTick()
+
+    expect(wrapper.findAll('.source-card')[1]?.classes()).toContain('is-focused')
   })
 
   it('toggles the source list from its heading while keeping the source count', async () => {

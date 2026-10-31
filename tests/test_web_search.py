@@ -119,6 +119,45 @@ class WebSearchNodeTest(unittest.TestCase):
         )
         self.assertEqual(result["question"], contextual_question)
 
+    def test_search_question_keeps_history_and_instructions_from_the_provider(self):
+        from src.workflows.nodes.web_search import web_search
+
+        contextual_question = (
+            "历史对话原文（仅用于解析当前问题中的指代、省略和背景）：\n"
+            "[用户] EUV光刻机是什么\n\n"
+            "请先结合历史对话补全当前问题的语义，再按补全后的问题判断任务类型。\n"
+            "当前用户问题：它在哪里应用较多"
+        )
+        grader = MagicMock()
+        grader.invoke.return_value = SimpleNamespace(relevant_indices=[])
+        rewriter = MagicMock()
+        rewriter.invoke.side_effect = RuntimeError("rewrite unavailable")
+        with patch(
+            "src.workflows.nodes.web_search.web_search_tool.invoke",
+            return_value=[],
+        ) as search, patch(
+            "src.workflows.nodes.web_search.retrieval_grader_chain",
+            grader,
+        ), patch(
+            "src.workflows.nodes.web_search.web_query_rewriter_chain",
+            rewriter,
+        ):
+            web_search(
+                {
+                    "question": contextual_question,
+                    "original_question": "它在哪里应用较多",
+                    "search_question": "EUV光刻机是什么 它在哪里应用较多",
+                }
+            )
+
+        queries = [call.args[0] for call in search.call_args_list]
+        self.assertEqual(len(queries), 2)
+        self.assertTrue(queries[0].startswith("EUV光刻机是什么 它在哪里应用较多"))
+        for query in queries:
+            self.assertNotIn("历史对话原文", query)
+            self.assertNotIn("当前用户问题", query)
+            self.assertNotIn("latest production status", query)
+
     def test_ordinary_search_expands_semiconductor_acronym_and_uses_pro_budget(self):
         from src.workflows.nodes.web_search import web_search
 

@@ -527,7 +527,7 @@ def generate_report(state):
         "- 关键限制："
         + (
             f"存在{len(recommendation.get('unresolved_items', []))}"
-            "项可能影响结论的待验证事项，详见第7节。"
+            "项可能影响结论的待验证事项。"
             if recommendation.get("unresolved_items")
             else "无"
         ),
@@ -656,50 +656,6 @@ def generate_report(state):
             )
     else:
         lines.append("- 暂无可验证的风险条目。")
-
-    lines.extend(["", "## 7. 待验证事项", ""])
-    gaps = report_data["evidence_gaps"]
-    if gaps:
-        for gap in gaps:
-            lines.append(f"- [{gap['priority']}优先级] {gap['description']}。")
-    else:
-        lines.append("- 无。")
-
-    lines.extend(["", "## 8. 证据索引", ""])
-    for record in report_data["evidence"]:
-        support_labels = []
-        for support in record.get("supports", []):
-            support_labels.append(
-                f"{support.get('candidate_name')}/"
-                f"{support.get('criterion_label')}/"
-                f"{support.get('level_label')}"
-            )
-        source = (
-            f"[查看来源]({record['url']})"
-            if record.get("url")
-            else record.get("display_source", "来源未验证")
-        )
-        lines.extend(
-            [
-                f"### [{record.get('evidence_id')}] {record.get('title') or '未命名证据'}",
-                f"- 来源类型：{record.get('source_label')}",
-                f"- 来源：{source}",
-                "- 支持关系：" + ("；".join(support_labels) or "未标注"),
-                f"- 原文片段：{record.get('excerpt') or '未提供'}",
-                "",
-            ]
-        )
-
-    lines.extend(["## 9. 审核说明", ""])
-    lines.extend(
-        [
-            f"- 审核结果：{REVIEW_LABELS.get(review.get('verdict'), '未审核')}",
-            f"- 证据检索轮次：{state.get('evidence_round', 0)}",
-            f"- 推荐审核轮次：{state.get('review_round', 0)}",
-            "- 审核原因：" + ("；".join(review.get("reasons", [])) or "无"),
-            "- 警告：" + ("；".join(state.get("warnings", [])) or "无"),
-        ]
-    )
 
     status = (
         "needs_human_review"

@@ -4,6 +4,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 from src.infrastructure.llm.chat_model import llm
+from src.observability.answer_stream import stream_chain_text
 from src.observability.logging import log
 
 
@@ -79,12 +80,13 @@ def generate(state):
 
     # RAG生成过程
     started_at = perf_counter()
-    generation = rag_chain.invoke(
+    generation = stream_chain_text(
+        rag_chain,
         {
             "context": format_docs(documents),
             "question": question,
             "memory_context": memory_context,
-        }
+        },
     )
     log.info(f"---回答生成完成：耗时={perf_counter() - started_at:.2f}s---")
     return {

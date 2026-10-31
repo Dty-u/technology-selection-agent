@@ -12,6 +12,22 @@ describe('MessageComposer', () => {
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('补充后的完整问题')
   })
 
+  it('starts compact and grows with its content up to a limit', async () => {
+    const wrapper = mount(MessageComposer)
+    const element = wrapper.get('textarea').element as HTMLTextAreaElement
+    expect(element.getAttribute('rows')).toBe('1')
+
+    Object.defineProperty(element, 'scrollHeight', { configurable: true, value: 120 })
+    await wrapper.get('textarea').setValue('第一行\n第二行\n第三行')
+    expect(element.style.height).toBe('120px')
+    expect(element.style.overflowY).toBe('hidden')
+
+    Object.defineProperty(element, 'scrollHeight', { configurable: true, value: 900 })
+    await wrapper.get('textarea').setValue('很多行'.repeat(100))
+    expect(element.style.height).toBe('220px')
+    expect(element.style.overflowY).toBe('auto')
+  })
+
   it('submits with Enter and preserves Shift+Enter for multiline input', async () => {
     const wrapper = mount(MessageComposer)
     const textarea = wrapper.get('textarea')

@@ -13,7 +13,7 @@ defineProps<{ questions: string[] }>()
       <ol>
         <li v-for="question in questions" :key="question">{{ question }}</li>
       </ol>
-      <p>请在下方一次性回答；服务端将从当前 checkpoint 恢复。</p>
+      <p>请在下方一次性回答，回答后会在当前会话中继续。</p>
     </div>
   </section>
 </template>

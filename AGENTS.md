@@ -45,6 +45,17 @@ with open_memory_application() as application:
     result = application.invoke({"query": "用户的一句话"}, config=config)
 ```
 
+The HTTP API stores conversation history in MySQL, scoped as
+`user_id` → `project_id` → `thread_id`; checkpoints stay workflow-only state.
+Create the history tables once before starting the API:
+
+```powershell
+python -m src.infrastructure.memory setup --sessions
+```
+
+`X-User-ID` is client-supplied and not authenticated, so expose this API only to
+trusted networks until real login exists.
+
 Run the memory-aware interactive CLI with:
 
 ```powershell

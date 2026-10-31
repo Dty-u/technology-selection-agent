@@ -44,6 +44,28 @@ export function sessionStorageKey(userId: string, projectId: string): string {
   return `rag-agent.sessions.v1:${encodeURIComponent(userId)}:${encodeURIComponent(projectId)}`
 }
 
+function importMarkerKey(userId: string, projectId: string): string {
+  return `rag-agent.sessions.imported.v1:${encodeURIComponent(userId)}:${encodeURIComponent(projectId)}`
+}
+
+export function isSessionImportDone(
+  storage: StorageLike,
+  userId: string,
+  projectId: string,
+): boolean {
+  return (
+    readJson(storage, importMarkerKey(userId, projectId), (value) => value === true).value === true
+  )
+}
+
+export function markSessionImportDone(
+  storage: StorageLike,
+  userId: string,
+  projectId: string,
+): void {
+  writeJson(storage, importMarkerKey(userId, projectId), true)
+}
+
 export function loadSessionRecords(
   storage: StorageLike,
   userId: string,

@@ -30,6 +30,10 @@ function parseLayout(value: unknown): PanelLayout {
   return { sidebar: Number(candidate.sidebar), inspector: Number(candidate.inspector) }
 }
 
+function parseInspectorCollapsed(value: unknown): boolean {
+  return (value as { inspectorCollapsed?: unknown } | null)?.inspectorCollapsed === true
+}
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum)
 }
@@ -38,6 +42,7 @@ export function useWorkspacePanelResize() {
   const initial = defaultLayout(globalThis.innerWidth || 1280)
   const sidebarWidth = ref(initial.sidebar)
   const inspectorWidth = ref(initial.inspector)
+  const inspectorCollapsed = ref(false)
   const resizingPanel = ref<ResizablePanel | null>(null)
   let pointerStartX = 0
   let widthAtPointerStart = 0
@@ -45,7 +50,10 @@ export function useWorkspacePanelResize() {
   const sidebarMaximum = computed(() =>
     Math.max(
       SIDEBAR_MIN,
-      Math.min(SIDEBAR_MAX, window.innerWidth - inspectorWidth.value - CENTER_MIN),
+      Math.min(
+        SIDEBAR_MAX,
+        window.innerWidth - (inspectorCollapsed.value ? 0 : inspectorWidth.value) - CENTER_MIN,
+      ),
     ),
   )
   const inspectorMaximum = computed(() =>
@@ -71,7 +79,15 @@ export function useWorkspacePanelResize() {
     writeJson(localStorage, STORAGE_KEY, {
       sidebar: Math.round(sidebarWidth.value),
       inspector: Math.round(inspectorWidth.value),
+      inspectorCollapsed: inspectorCollapsed.value,
     })
+  }
+
+  function setInspectorCollapsed(collapsed: boolean) {
+    if (inspectorCollapsed.value === collapsed) return
+    inspectorCollapsed.value = collapsed
+    constrainToViewport()
+    persist()
   }
 
   function setWidth(panel: ResizablePanel, requestedWidth: number) {
@@ -139,6 +155,7 @@ export function useWorkspacePanelResize() {
       sidebarWidth.value = saved.sidebar
       inspectorWidth.value = saved.inspector
     }
+    inspectorCollapsed.value = readJson(localStorage, STORAGE_KEY, parseInspectorCollapsed).value === true
     constrainToViewport()
   }
 
@@ -156,6 +173,8 @@ export function useWorkspacePanelResize() {
   })
 
   return {
+    inspectorCollapsed,
+    setInspectorCollapsed,
     inspectorMaximum,
     inspectorMinimum: INSPECTOR_MIN,
     inspectorWidth,

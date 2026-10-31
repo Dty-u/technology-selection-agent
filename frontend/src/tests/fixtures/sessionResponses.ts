@@ -63,6 +63,36 @@ export function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+export function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}
+data: ${JSON.stringify(data)}
+
+`
+}
+
+/** An SSE response whose chunks the test pushes and closes explicitly. */
+export function controlledEventStream() {
+  const encoder = new TextEncoder()
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const body = new ReadableStream<Uint8Array>({
+    start(value) {
+      controller = value
+    },
+  })
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+    push(chunk: string) {
+      controller.enqueue(encoder.encode(chunk))
+    },
+    close() {
+      controller.close()
+    },
+  }
+}
+
 export const validReportData: ReportData = {
   schema_version: '1.0',
   report_version: '2.0',

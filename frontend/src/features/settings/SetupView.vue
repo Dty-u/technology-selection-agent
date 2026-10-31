@@ -44,7 +44,7 @@ function submit() {
       </p>
       <div class="setup-principles">
         <span><Database :size="17" aria-hidden="true" /> 服务端状态保持权威</span>
-        <span><ShieldCheck :size="17" aria-hidden="true" /> 本机只保存会话索引</span>
+        <span><ShieldCheck :size="17" aria-hidden="true" /> 会话按用户和项目保存</span>
       </div>
     </section>
 

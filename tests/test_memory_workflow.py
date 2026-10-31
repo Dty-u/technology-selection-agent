@@ -738,11 +738,20 @@ class MemoryAwareGraphTest(unittest.TestCase):
             },
         ]
 
+        rewriter = MagicMock()
+        rewriter.invoke.return_value = AIMessage(
+            content='{"standalone_query":"光刻机有什么用"}'
+        )
+
         with patch.object(
             router_module,
             "query_classification_chain",
             classifier,
-        ), patch.object(router_module, "rag_qa_graph", rag_graph):
+        ), patch.object(router_module, "standalone_query_chain", rewriter), patch.object(
+            router_module,
+            "rag_qa_graph",
+            rag_graph,
+        ):
             runner.invoke(
                 {"query": "光刻机是什么"},
                 config=self._config(request_id="request-1"),
@@ -754,9 +763,11 @@ class MemoryAwareGraphTest(unittest.TestCase):
 
         self.assertEqual(follow_up["query_type"], "rag_qa")
         self.assertEqual(rag_graph.invoke.call_count, 2)
+        rewrite_input = rewriter.invoke.call_args.args[0]
+        self.assertEqual(rewrite_input["query"], "他有什么用")
+        self.assertIn("光刻机是什么", rewrite_input["short_term_context"])
         second_payload = rag_graph.invoke.call_args_list[1].args[0]
-        self.assertIn("光刻机是什么", second_payload["question"])
-        self.assertIn("他有什么用", second_payload["question"])
+        self.assertEqual(second_payload["question"], "光刻机有什么用")
 
     def test_current_semiconductor_question_overrides_prior_out_of_scope_turn(self):
         import json
@@ -868,6 +879,50 @@ class MemoryAwareRunnerAsyncTest(unittest.IsolatedAsyncioTestCase):
             "values",
         )
         graph.aupdate_state.assert_awaited_once()
+
+    async def test_astream_logs_completion_with_final_query_type(self):
+        from types import SimpleNamespace
+
+        import src.workflows.memory_runner as runner_module
+
+        async def stream_values(*args, **kwargs):
+            yield {"query_type": "rag_qa"}
+
+        graph = MagicMock()
+        graph.astream.side_effect = stream_values
+        graph.aget_state = AsyncMock(return_value=SimpleNamespace(values={}))
+        runner = runner_module.MemoryAwareRunner(graph=graph)
+
+        with patch.object(runner_module, "log") as log:
+            chunks = [
+                chunk
+                async for chunk in runner.astream(
+                    {"query": "什么是FinFET"},
+                    config={
+                        "configurable": {
+                            "user_id": "user-a",
+                            "thread_id": "thread-a",
+                            "request_id": "request-a",
+                        }
+                    },
+                )
+            ]
+
+        self.assertEqual(chunks, [{"query_type": "rag_qa"}])
+        message, request_id, query_type, _elapsed = log.info.call_args.args
+        self.assertIn("[工作流][astream] 完成", message)
+        self.assertEqual((request_id, query_type), ("request-a", "rag_qa"))
+
+    async def test_aclose_session_deletes_thread_without_error(self):
+        from src.workflows.memory_runner import MemoryAwareRunner
+
+        checkpointer = MagicMock()
+        checkpointer.adelete_thread = AsyncMock()
+        runner = MemoryAwareRunner(graph=MagicMock(), checkpointer=checkpointer)
+
+        await runner.aclose_session(" thread-a ", user_id="user-a")
+
+        checkpointer.adelete_thread.assert_awaited_once_with("thread-a")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from src.infrastructure.checkpointing.mysql import open_mysql_checkpointer
 from src.infrastructure.memory.milvus import MilvusMemoryIndex
 from src.infrastructure.memory.mysql import MySQLMemoryRepository
 from src.infrastructure.memory.worker import MemoryProjectionWorker
+from src.infrastructure.sessions.repository import MySQLSessionRepository
 
 
 def setup_databases(
@@ -14,11 +15,17 @@ def setup_databases(
     checkpoint: bool,
     memory: bool,
     milvus_memory: bool = False,
+    sessions: bool = False,
 ) -> dict[str, bool]:
     """Create only the explicitly selected schemas."""
-    if not checkpoint and not memory and not milvus_memory:
-        raise ValueError("select --checkpoint, --memory and/or --milvus-memory")
+    if not checkpoint and not memory and not milvus_memory and not sessions:
+        raise ValueError(
+            "select --checkpoint, --memory, --milvus-memory and/or --sessions"
+        )
     result = {}
+    if sessions:
+        MySQLSessionRepository().setup_schema()
+        result["sessions_setup"] = True
     if checkpoint:
         with open_mysql_checkpointer(setup=True):
             pass
@@ -51,6 +58,7 @@ def main() -> None:
     setup_parser.add_argument("--checkpoint", action="store_true")
     setup_parser.add_argument("--memory", action="store_true")
     setup_parser.add_argument("--milvus-memory", action="store_true")
+    setup_parser.add_argument("--sessions", action="store_true")
 
     worker_parser = subparsers.add_parser("worker", help="处理一批投影事件")
     worker_parser.add_argument("--limit", type=int, default=20)
@@ -70,6 +78,7 @@ def main() -> None:
             checkpoint=args.checkpoint,
             memory=args.memory,
             milvus_memory=args.milvus_memory,
+            sessions=args.sessions,
         )
         print(json.dumps(result, ensure_ascii=False))
         return

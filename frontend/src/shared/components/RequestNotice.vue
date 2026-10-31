@@ -2,8 +2,13 @@
 import { AlertCircle, Info, TriangleAlert } from '@lucide/vue'
 
 withDefaults(
-  defineProps<{ tone?: 'info' | 'warning' | 'error'; title?: string; message: string }>(),
-  { tone: 'info', title: '' },
+  defineProps<{
+    tone?: 'info' | 'warning' | 'error'
+    title?: string
+    message: string
+    detail?: string
+  }>(),
+  { tone: 'info', title: '', detail: '' },
 )
 </script>
 
@@ -15,6 +20,7 @@ withDefaults(
     <div>
       <strong v-if="title">{{ title }}</strong>
       <p>{{ message }}</p>
+      <small v-if="detail" class="request-notice__detail">{{ detail }}</small>
     </div>
   </div>
 </template>

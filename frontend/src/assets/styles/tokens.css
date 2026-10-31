@@ -23,6 +23,7 @@
   --font-cn: 'Noto Sans SC Variable', 'IBM Plex Sans Variable', sans-serif;
   --font-mono: 'IBM Plex Mono', monospace;
   --shadow-panel: 0 20px 54px rgba(55, 62, 58, 0.14);
+  --text-xs: 12px;
   --radius-sm: 8px;
   --radius-md: 14px;
   --radius-lg: 22px;

@@ -432,7 +432,16 @@ class QueryClassificationTest(unittest.TestCase):
             )
         )
 
-        with patch.object(router_module, "query_classification_chain", chain):
+        rewriter = MagicMock()
+        rewriter.invoke.return_value = AIMessage(
+            content='{"standalone_query":"光刻机主要应用在哪些领域？"}'
+        )
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            chain,
+        ), patch.object(router_module, "standalone_query_chain", rewriter):
             result = router_module.classify_query(
                 {
                     "query": "它主要应用在哪些领域？",
@@ -447,6 +456,95 @@ class QueryClassificationTest(unittest.TestCase):
         self.assertEqual(result["source_preference"], "auto")
         self.assertEqual(result["response_type"], "answer")
         self.assertIn("短期会话原文", result["routing_reason"])
+        self.assertEqual(result["standalone_query"], "光刻机主要应用在哪些领域？")
+
+    def test_follow_up_override_survives_a_failed_rewrite(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content=(
+                '{"query_type":"direct_response",'
+                '"source_preference":"none","response_type":"answer",'
+                '"direct_response_kind":"out_of_scope",'
+                '"reason":"未识别到上下文"}'
+            )
+        )
+        rewriter = MagicMock()
+        rewriter.invoke.side_effect = RuntimeError("provider down")
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            chain,
+        ), patch.object(router_module, "standalone_query_chain", rewriter), patch.object(
+            router_module.log,
+            "warning",
+        ):
+            result = router_module.classify_query(
+                {
+                    "query": "它主要应用在哪些领域？",
+                    "short_term_context": "[用户] 光刻机有什么用途？",
+                }
+            )
+
+        self.assertEqual(result["query_type"], "rag_qa")
+        self.assertNotIn("standalone_query", result)
+
+    def test_assistant_boundary_reply_does_not_trigger_follow_up_override(self):
+        import src.workflows.nodes.query_router as router_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content=(
+                '{"query_type":"direct_response",'
+                '"source_preference":"none","response_type":"answer",'
+                '"direct_response_kind":"out_of_scope",'
+                '"reason":"手机用途不属于半导体问题"}'
+            )
+        )
+        rewriter = MagicMock()
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            chain,
+        ), patch.object(router_module, "standalone_query_chain", rewriter):
+            result = router_module.classify_query(
+                {
+                    "query": "他能干嘛",
+                    "short_term_context": (
+                        "[用户] 手机是电子设备吗\n"
+                        "[助手] 手机属于电子设备。我更专注于半导体领域，"
+                        "如果想了解处理器制程、芯片架构可以随时问我。\n"
+                        "[用户] 他能干嘛"
+                    ),
+                }
+            )
+
+        self.assertEqual(result["query_type"], "direct_response")
+        self.assertEqual(result["direct_response_kind"], "out_of_scope")
+        rewriter.invoke.assert_not_called()
+
+    def test_follow_up_override_uses_only_the_latest_explicit_user_turn(self):
+        from src.workflows.nodes.query_rules import (
+            _is_semiconductor_pronoun_follow_up,
+        )
+
+        cases = (
+            ("[用户] 光刻机是什么\n[用户] 手机是电子设备吗", False),
+            ("[用户] 手机是电子设备吗\n[用户] 光刻机是什么", True),
+            ("[用户] 光刻机是什么\n[助手] 一种设备\n[用户] 它贵吗\n[助手] 很贵", True),
+            ("[用户] 光刻机是什么\n[助手] 一种设备\n[用户] 好吧\n[助手] 嗯", True),
+            ("[用户] 手机\n光刻机都是什么\n[助手] 设备", True),
+            ("[助手] 我专注半导体领域", False),
+        )
+        for context, expected in cases:
+            with self.subTest(context=context):
+                self.assertEqual(
+                    _is_semiconductor_pronoun_follow_up("它有什么用", context),
+                    expected,
+                )
 
     def test_colloquial_pronoun_follow_up_overrides_mistaken_capabilities_route(self):
         import src.workflows.nodes.query_router as router_module
@@ -461,7 +559,16 @@ class QueryClassificationTest(unittest.TestCase):
             )
         )
 
-        with patch.object(router_module, "query_classification_chain", chain):
+        rewriter = MagicMock()
+        rewriter.invoke.return_value = AIMessage(
+            content='{"standalone_query":"光刻机有什么用？"}'
+        )
+
+        with patch.object(
+            router_module,
+            "query_classification_chain",
+            chain,
+        ), patch.object(router_module, "standalone_query_chain", rewriter):
             result = router_module.classify_query(
                 {
                     "query": "他有什么用？",
@@ -520,12 +627,19 @@ class QueryClassificationTest(unittest.TestCase):
 
         chain = MagicMock()
         chain.invoke.return_value = AIMessage(content="无法输出 JSON")
+        rewriter = MagicMock()
+        rewriter.invoke.return_value = AIMessage(
+            content='{"standalone_query":"EUV光刻机现在主要用在哪里？"}'
+        )
 
         with patch.object(
             router_module,
             "query_classification_chain",
             chain,
-        ), patch.object(router_module.log, "warning"):
+        ), patch.object(router_module, "standalone_query_chain", rewriter), patch.object(
+            router_module.log,
+            "warning",
+        ):
             result = router_module.classify_query(
                 {
                     "query": "他现在主要用在哪里？",
@@ -809,6 +923,48 @@ class QuerySubgraphInvocationTest(unittest.TestCase):
         self.assertEqual(payload["original_question"], "光刻机主要应用在哪些方面")
         self.assertNotIn("历史对话原文", payload["question"])
         self.assertEqual(payload["short_term_context"], context)
+
+    def test_invoke_rag_qa_gives_search_a_clean_question_without_standalone(self):
+        import src.workflows.nodes.query_router as router_module
+
+        child_graph = MagicMock()
+        child_graph.invoke.return_value = {"generation": "答案"}
+        with patch.object(router_module, "rag_qa_graph", child_graph):
+            router_module.invoke_rag_qa(
+                {
+                    "query": "它在哪里应用较多",
+                    "source_preference": "auto",
+                    "response_type": "answer",
+                    "short_term_context": (
+                        "[用户] EUV光刻机是什么\n"
+                        "[助手] EUV是一种极紫外光刻设备。"
+                    ),
+                }
+            )
+
+        payload = child_graph.invoke.call_args.args[0]
+        self.assertEqual(
+            payload["search_question"],
+            "EUV光刻机是什么 它在哪里应用较多",
+        )
+
+    def test_invoke_rag_qa_omits_search_question_with_standalone(self):
+        import src.workflows.nodes.query_router as router_module
+
+        child_graph = MagicMock()
+        child_graph.invoke.return_value = {"generation": "答案"}
+        with patch.object(router_module, "rag_qa_graph", child_graph):
+            router_module.invoke_rag_qa(
+                {
+                    "query": "它在哪里应用较多",
+                    "standalone_query": "EUV光刻机在哪里应用较多",
+                    "source_preference": "auto",
+                    "response_type": "answer",
+                    "short_term_context": "[用户] EUV光刻机是什么",
+                }
+            )
+
+        self.assertNotIn("search_question", child_graph.invoke.call_args.args[0])
 
     def test_invoke_rag_qa_ignores_standalone_query_without_history(self):
         import src.workflows.nodes.query_router as router_module
@@ -1343,7 +1499,51 @@ class QueryResponseTest(unittest.TestCase):
         self.assertEqual(result["sources"][0]["url"], "https://example.com/a")
         json.dumps(result, ensure_ascii=False)
 
-    def test_rag_retrieval_error_is_not_reported_as_completed(self):
+    def test_no_relevant_evidence_returns_a_visible_answer_without_error(self):
+        from src.workflows.nodes.query_router import build_query_response
+
+        for retrieval_error in (
+            "web_search_retry_exhausted",
+            "web_search_no_relevant_results",
+        ):
+            with self.subTest(retrieval_error=retrieval_error):
+                result = build_query_response(
+                    {
+                        "query": "latest GAA cost",
+                        "query_type": "rag_qa",
+                        "source_preference": "web",
+                        "response_type": "answer",
+                        "status": "running",
+                        "warnings": [],
+                        "child_graph_result": {
+                            "documents": [],
+                            "retrieval_source": "web_search",
+                            "retrieval_error": retrieval_error,
+                            "web_search_attempt_count": 2,
+                            "web_search_queries": [
+                                "GAA semiconductor production",
+                                "Gate-All-Around transistor mass production progress",
+                            ],
+                            "web_relevant_result_count": 0,
+                        },
+                    }
+                )
+
+                self.assertEqual(result["status"], "completed")
+                self.assertIn("没有找到", result["answer"])
+                self.assertEqual(result["sources"], [])
+                self.assertIn("未取得足以回答问题的相关资料。", result["warnings"])
+                self.assertEqual(result["details"].get("web_search_attempt_count"), 2)
+                self.assertEqual(
+                    len(result["details"].get("web_search_queries", [])),
+                    2,
+                )
+                self.assertEqual(
+                    result["details"].get("web_relevant_result_count"),
+                    0,
+                )
+
+    def test_unavailable_retrieval_is_still_reported_as_error(self):
         from src.workflows.nodes.query_router import build_query_response
 
         result = build_query_response(
@@ -1357,23 +1557,14 @@ class QueryResponseTest(unittest.TestCase):
                 "child_graph_result": {
                     "documents": [],
                     "retrieval_source": "web_search",
-                    "retrieval_error": "web_search_retry_exhausted",
-                    "web_search_attempt_count": 2,
-                    "web_search_queries": [
-                        "GAA semiconductor production",
-                        "Gate-All-Around transistor mass production progress",
-                    ],
-                    "web_relevant_result_count": 0,
+                    "retrieval_error": "web_search_unavailable",
                 },
             }
         )
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["answer"], "")
-        self.assertIn("未取得足以回答问题的相关资料。", result["warnings"])
-        self.assertEqual(result["details"].get("web_search_attempt_count"), 2)
-        self.assertEqual(len(result["details"].get("web_search_queries", [])), 2)
-        self.assertEqual(result["details"].get("web_relevant_result_count"), 0)
+        self.assertIn("未获取到可用检索证据，无法生成可验证的回答。", result["warnings"])
 
     def test_web_report_is_written_to_report_field(self):
         from src.workflows.nodes.query_router import build_query_response

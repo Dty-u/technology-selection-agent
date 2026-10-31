@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h, nextTick, watch } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useSettingsStore } from '@/features/settings/settingsStore'
@@ -8,7 +8,9 @@ import MessageBubble from '@/features/sessions/components/MessageBubble.vue'
 import {
   awaitingSelectionResponse,
   completedRagResponse,
+  controlledEventStream,
   jsonResponse,
+  sseFrame,
 } from '@/tests/fixtures/sessionResponses'
 import { useSessionStore } from '../sessionStore'
 
@@ -495,6 +497,188 @@ describe('sessionStore', () => {
     expect(fetcher.mock.calls[1]?.[1]?.method).toBe('GET')
   })
 
+  describe('session status accuracy', () => {
+    const record = {
+      threadId: '22222222-2222-4222-8222-222222222222',
+      userId: 'user-a',
+      projectId: 'project-a',
+      title: '已完成的会话',
+      createdAt: '2026-08-23T00:00:00.000Z',
+      updatedAt: '2026-08-23T00:00:00.000Z',
+      status: 'completed' as const,
+      messages: [
+        {
+          id: 'answer',
+          role: 'assistant' as const,
+          content: completedRagResponse.answer,
+          createdAt: '2026-08-23T00:00:00.000Z',
+          delivery: 'sent' as const,
+        },
+      ],
+    }
+
+    function seed(...records: (typeof record | Record<string, unknown>)[]) {
+      localStorage.setItem(
+        'rag-agent.sessions.v1:user-a:project-a',
+        JSON.stringify({ version: 1, sessions: records }),
+      )
+    }
+
+    it('does not mark an unchanged session as recently active when it is synced', async () => {
+      seed(record)
+      vi.stubGlobal(
+        'fetch',
+        vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(completedRagResponse)),
+      )
+      const store = useSessionStore()
+      store.initialize()
+      store.selectSession(record.threadId)
+
+      await store.syncActiveSession()
+
+      expect(store.activeSession?.updatedAt).toBe(record.updatedAt)
+    })
+
+    it('updates the activity time when a sync brings new content', async () => {
+      seed({ ...record, messages: [] })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(completedRagResponse)),
+      )
+      const store = useSessionStore()
+      store.initialize()
+      store.selectSession(record.threadId)
+
+      await store.syncActiveSession()
+
+      expect(store.activeSession?.updatedAt).not.toBe(record.updatedAt)
+    })
+
+    it('stops reporting a session as running once its first request fails', async () => {
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('offline')))
+      const store = useSessionStore()
+      store.initialize()
+
+      await store.submit('黑', false)
+
+      expect(store.sessions[0]?.status).toBe('error')
+    })
+
+    it('notifies the session list when a new session finishes', async () => {
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(replyToCreate()))
+      const store = useSessionStore()
+      store.initialize()
+      const observed: (string | undefined)[] = []
+      const stop = watch(
+        () => store.sessions[0]?.status,
+        (status) => observed.push(status),
+        { flush: 'sync' },
+      )
+
+      await store.submit('What is FinFET?', false)
+      stop()
+
+      expect(observed[observed.length - 1]).toBe('completed')
+    })
+
+    it('keeps a session running when the server says it is still busy', async () => {
+      seed(record)
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            jsonResponse({ detail: { code: 'session_busy' } }, 409),
+          ),
+      )
+      const store = useSessionStore()
+      store.initialize()
+      store.selectSession(record.threadId)
+      store.sessions[0]!.status = 'running'
+
+      await store.submit('继续', false)
+
+      expect(store.sessions[0]?.status).toBe('running')
+    })
+
+    it('refreshes records left running and flags the ones it cannot verify', async () => {
+      const recoverable = { ...record, status: 'running', messages: [] }
+      const missing = {
+        ...recoverable,
+        threadId: '33333333-3333-4333-8333-333333333333',
+      }
+      seed(recoverable, missing, { ...record, threadId: '44444444-4444-4444-8444-444444444444' })
+      const fetcher = vi.fn<typeof fetch>().mockImplementation((input) =>
+        Promise.resolve(
+          String(input).includes(missing.threadId)
+            ? jsonResponse({ detail: { code: 'session_not_found' } }, 404)
+            : jsonResponse(completedRagResponse),
+        ),
+      )
+      vi.stubGlobal('fetch', fetcher)
+      const store = useSessionStore()
+      store.initialize()
+
+      await store.refreshRunningSessions()
+
+      expect(fetcher).toHaveBeenCalledTimes(2)
+      expect(store.sessions.find((item) => item.threadId === record.threadId)?.status).toBe(
+        'completed',
+      )
+      expect([...store.unknownStatusIds]).toEqual([missing.threadId])
+    })
+  })
+
+  describe('failed message recovery', () => {
+    function rejectThenReply() {
+      return vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new TypeError('offline'))
+        .mockImplementation(replyToCreate())
+    }
+
+    it('retries a failed first message as a fresh session', async () => {
+      vi.stubGlobal('fetch', rejectThenReply())
+      const store = useSessionStore()
+      store.initialize()
+      await store.submit('黑', false)
+      const failedThreadId = store.activeThreadId
+      const failedMessage = store.activeSession?.messages[0]
+
+      await store.retryFailedMessage(failedMessage!.id, false)
+
+      expect(store.sessions).toHaveLength(1)
+      expect(store.activeThreadId).not.toBe(failedThreadId)
+      expect(store.activeSession?.messages.map((message) => message.delivery)).toEqual([
+        'sent',
+        'sent',
+      ])
+    })
+
+    it('discarding the only failed message removes the empty local record', async () => {
+      vi.stubGlobal('fetch', rejectThenReply())
+      const store = useSessionStore()
+      store.initialize()
+      await store.submit('黑', false)
+
+      expect(store.discardFailedMessage(store.activeSession!.messages[0]!.id)).toBe(true)
+
+      expect(store.sessions).toHaveLength(0)
+      expect(store.activeThreadId).toBeNull()
+      expect(store.notice).toBeNull()
+    })
+
+    it('refuses to discard a message that was delivered', async () => {
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(replyToCreate()))
+      const store = useSessionStore()
+      store.initialize()
+      await store.submit('黑', false)
+
+      expect(store.discardFailedMessage(store.activeSession!.messages[0]!.id)).toBe(false)
+      expect(store.activeSession?.messages).toHaveLength(2)
+    })
+  })
+
   it('reports API reachability without claiming dependency health', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ status: 'ok' }))
     vi.stubGlobal('fetch', fetcher)
@@ -504,5 +688,91 @@ describe('sessionStore', () => {
     await store.checkHealth()
 
     expect(store.apiReachable).toBe(true)
+  })
+
+  describe('answer streaming', () => {
+    beforeEach(() => {
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+        callback(0)
+        return 0
+      })
+      vi.stubGlobal('cancelAnimationFrame', () => undefined)
+    })
+
+    function streamingFetcher(stream: ReturnType<typeof controlledEventStream>) {
+      let threadId = ''
+      const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+        if (init?.method === 'POST') {
+          threadId = new Headers(init.headers).get('X-Thread-ID') ?? ''
+          return Promise.resolve(stream.response)
+        }
+        return Promise.resolve(jsonResponse({ ...completedRagResponse, thread_id: threadId }))
+      })
+      return { fetcher, threadId: () => threadId }
+    }
+
+    function lastMessage(store: ReturnType<typeof useSessionStore>) {
+      return store.visibleMessages[store.visibleMessages.length - 1]
+    }
+
+    async function settle() {
+      for (let index = 0; index < 5; index += 1) await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    it('shows deltas live, clears them on reset, and swaps in the final answer', async () => {
+      const stream = controlledEventStream()
+      const { fetcher, threadId } = streamingFetcher(stream)
+      vi.stubGlobal('fetch', fetcher)
+      const store = useSessionStore()
+      store.initialize()
+
+      const pending = store.submit('What is FinFET?', false)
+      stream.push(sseFrame('reset', {}) + sseFrame('delta', { text: '草稿' }))
+      await settle()
+      const draft = lastMessage(store)
+      expect(draft).toMatchObject({ role: 'assistant', content: '草稿', delivery: 'streaming' })
+
+      stream.push(sseFrame('reset', {}))
+      await settle()
+      expect(store.visibleMessages.map((message) => message.role)).toEqual(['user'])
+
+      stream.push(sseFrame('delta', { text: 'FinFET 使用' }) + sseFrame('delta', { text: '鳍式' }))
+      await settle()
+      expect(lastMessage(store)?.content).toBe('FinFET 使用鳍式')
+
+      stream.push(sseFrame('final', { ...completedRagResponse, thread_id: threadId() }))
+      stream.close()
+      await pending
+
+      expect(store.visibleMessages.map((message) => [message.role, message.delivery])).toEqual([
+        ['user', 'sent'],
+        ['assistant', 'sent'],
+      ])
+      expect(lastMessage(store)?.content).toBe(completedRagResponse.answer)
+      expect(JSON.stringify({ ...localStorage })).not.toContain('streaming')
+    })
+
+    it('drops the live draft and fails the turn when the stream reports an error', async () => {
+      const stream = controlledEventStream()
+      const { fetcher } = streamingFetcher(stream)
+      vi.stubGlobal('fetch', fetcher)
+      const store = useSessionStore()
+      store.initialize()
+
+      const pending = store.submit('What is FinFET?', false)
+      stream.push(sseFrame('delta', { text: '部分回答' }))
+      await settle()
+      expect(lastMessage(store)?.delivery).toBe('streaming')
+
+      stream.push(sseFrame('error', { code: 'service_unavailable' }))
+      stream.close()
+      await pending
+
+      expect(store.notice).toMatchObject({ status: 503, code: 'service_unavailable' })
+      expect(store.visibleMessages.map((message) => [message.role, message.delivery])).toEqual([
+        ['user', 'failed'],
+      ])
+    })
   })
 })

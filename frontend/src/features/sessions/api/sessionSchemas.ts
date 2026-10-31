@@ -233,8 +233,99 @@ export type SessionResponse = z.infer<typeof sessionResponseSchema>
 export type WorkflowProgress = z.infer<typeof workflowProgressSchema>
 export type CancelSessionResponse = z.infer<typeof cancelSessionResponseSchema>
 export type ReportSummary = z.infer<typeof reportSummarySchema>
+
+const reportLibraryItemSchema = reportSummarySchema.extend({
+  project_id: z.string(),
+  thread_id: z.string(),
+  session_title: z.string(),
+})
+const reportListSchema = z.object({ reports: z.array(reportLibraryItemSchema) })
+const reportContentSchema = z.object({
+  report_id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+  format: z.enum(['markdown', 'docx']),
+  content: z.string(),
+})
+
+export type ReportLibraryItem = z.infer<typeof reportLibraryItemSchema>
+export type ReportContent = z.infer<typeof reportContentSchema>
+
+export function parseReportList(value: unknown): ReportLibraryItem[] {
+  return reportListSchema.parse(value).reports
+}
+
+export function parseReportContent(value: unknown): ReportContent {
+  return reportContentSchema.parse(value)
+}
+
 export type ReportData = z.infer<typeof reportDataSchema>
 export type SessionSource = z.infer<typeof sourceSchema>
+
+const projectSchema = z.object({
+  project_id: z.string(),
+  name: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+})
+
+const projectListSchema = z.object({ projects: z.array(projectSchema) })
+
+const sessionListSchema = z.object({
+  sessions: z.array(
+    z.object({
+      thread_id: z.string(),
+      project_id: z.string(),
+      title: z.string(),
+      status: workflowStatusSchema,
+      created_at: z.string(),
+      updated_at: z.string(),
+    }),
+  ),
+})
+
+const messageListSchema = z.object({
+  messages: z.array(
+    z.object({
+      id: z.string(),
+      role: z.enum(['user', 'assistant', 'system']),
+      content: z.string(),
+      delivery: z.enum(['pending', 'sent', 'cancelled', 'failed']),
+      kind: z.enum(['message', 'clarification']),
+      request_id: z.string(),
+      created_at: z.string(),
+    }),
+  ),
+})
+
+const importSessionResponseSchema = z.object({
+  thread_id: z.string(),
+  imported: z.boolean(),
+})
+
+export type ProjectSummary = z.infer<typeof projectSchema>
+export type SessionList = z.infer<typeof sessionListSchema>
+export type MessageList = z.infer<typeof messageListSchema>
+
+export function parseProject(value: unknown): ProjectSummary {
+  return projectSchema.parse(value)
+}
+
+export function parseProjectList(value: unknown): ProjectSummary[] {
+  return projectListSchema.parse(value).projects
+}
+
+export function parseSessionList(value: unknown): SessionList {
+  return sessionListSchema.parse(value)
+}
+
+export function parseMessageList(value: unknown): MessageList {
+  return messageListSchema.parse(value)
+}
+
+export function parseImportSessionResponse(value: unknown) {
+  return importSessionResponseSchema.parse(value)
+}
 
 export function parseSessionResponse(value: unknown): SessionResponse {
   return sessionResponseSchema.parse(value)

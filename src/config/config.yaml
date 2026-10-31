@@ -1,7 +1,7 @@
 # Non-sensitive runtime configuration.
 llm:
   model: deepseek-v4-flash
-  temperature: 0.5
+  temperature: 0.2
   base_url: https://api.deepseek.com
   request_timeout_seconds: 60
   max_retries: 1
@@ -38,8 +38,8 @@ reranker:
   model: Qwen/Qwen3-VL-Reranker-8B
   base_url: https://api.siliconflow.cn/v1
   top_n: 6
-  request_timeout_seconds: 15
-  max_retries: 1
+  request_timeout_seconds: 4
+  max_retries: 0
 
 relevance:
   max_documents: 6
@@ -72,7 +72,7 @@ memory:
   outbox_max_attempts: 8
 
 workflow:
-  max_transform_count: 2
+  max_transform_count: 1
   max_generation_attempts: 2
 
 selection:
@@ -88,7 +88,7 @@ selection:
   retrieval_cache_ttl_seconds: 120
   evidence_card_max_characters: 800
   evidence_assessment_batch_size: 4
-  max_evidence_assessment_concurrency: 2
+  max_evidence_assessment_concurrency: 4
   evidence_assessment_single_batch_limit: 7
   decision_evidence_card_max_characters: 400
   max_decision_evidence_cards_per_criterion: 2

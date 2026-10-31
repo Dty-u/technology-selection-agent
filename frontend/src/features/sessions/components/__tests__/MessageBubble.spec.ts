@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { nextTick } from 'vue'
+import { describe, expect, it, vi } from 'vitest'
 
 import MessageBubble from '../MessageBubble.vue'
 
@@ -29,6 +30,93 @@ const evidenceReport = `## 8. 证据索引
 `
 
 describe('MessageBubble', () => {
+  const answer = {
+    id: 'assistant-answer',
+    role: 'assistant' as const,
+    createdAt: '2026-08-23T14:00:00.000Z',
+    delivery: 'sent' as const,
+    content: `GAA 优势明显[S1][S4]，来源未知[S9]。
+
+## 来源引用
+
+- [S1] 全环绕栅极晶体管，\`D:\\docs\\a.md\`
+- [S4] 技术改进，\`D:\\docs\\b.md\`
+- [S5] 驱动电流，\`D:\\docs\\b.md\``,
+  }
+  const sources = [
+    { title: '', url: 'D:\\docs\\a.md', source: 'D:\\docs\\a.md' },
+    { title: '', url: 'D:\\docs\\b.md', source: 'D:\\docs\\b.md' },
+  ]
+
+  it('links citations by document rather than by their number', async () => {
+    const wrapper = mount(MessageBubble, { props: { message: answer, sources } })
+
+    await wrapper.get('[data-citation="4"]').trigger('click')
+    await wrapper.get('[data-citation="1"]').trigger('click')
+
+    expect(wrapper.emitted('focusSource')).toEqual([[1], [0]])
+  })
+
+  it('leaves citations it cannot resolve as plain text', () => {
+    const wrapper = mount(MessageBubble, { props: { message: answer, sources } })
+
+    expect(wrapper.find('[data-citation="9"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('[S9]')
+  })
+
+  it('does not turn citation-like text in code or user messages into links', () => {
+    const inCode = mount(MessageBubble, {
+      props: {
+        message: { ...answer, content: '`[S1]`\n\n- [S1] `D:\\docs\\a.md`' },
+        sources,
+      },
+    })
+    const fromUser = mount(MessageBubble, {
+      props: {
+        message: { ...answer, role: 'user', content: '[S1]\n\n- [S1] D:\\docs\\a.md' },
+        sources,
+      },
+    })
+
+    expect(inCode.findAll('[data-citation]')).toHaveLength(1)
+    expect(inCode.get('code').text()).toBe('[S1]')
+    expect(fromUser.find('[data-citation]').exists()).toBe(false)
+  })
+
+  it('offers retry and edit only on failed messages', async () => {
+    const failed = { ...answer, role: 'user' as const, delivery: 'failed' as const, content: '黑' }
+    const wrapper = mount(MessageBubble, { props: { message: failed } })
+
+    const [retry, edit] = wrapper.findAll('.message__failure-actions button')
+    await retry?.trigger('click')
+    await edit?.trigger('click')
+    expect(wrapper.emitted('retry')).toEqual([[failed.id]])
+    expect(wrapper.emitted('edit')).toEqual([[failed]])
+
+    await wrapper.setProps({ actionsDisabled: true })
+    expect(retry?.attributes('disabled')).toBeDefined()
+
+    const sent = mount(MessageBubble, { props: { message: answer } })
+    expect(sent.find('.message__failure-actions').exists()).toBe(false)
+  })
+
+  it('copies a finished answer but not a streaming one', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const wrapper = mount(MessageBubble, { props: { message: answer } })
+
+    await wrapper.get('.message__actions button').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(writeText).toHaveBeenCalledWith(answer.content)
+    expect(wrapper.get('.message__actions').text()).toContain('已复制')
+
+    await wrapper.setProps({ message: { ...answer, delivery: 'streaming' } })
+    expect(wrapper.find('.message__actions').exists()).toBe(false)
+    vi.unstubAllGlobals()
+  })
+
   it('summarizes evidence count and the first three unique source hosts', () => {
     const wrapper = mount(MessageBubble, {
       props: {

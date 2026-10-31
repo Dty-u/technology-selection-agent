@@ -77,7 +77,12 @@ def _initial_search_query(question):
     return " ".join(dict.fromkeys(part for part in parts if part))
 
 
-def _rewrite_search_query(question, previous_queries, previous_answer):
+def _rewrite_search_query(
+    question,
+    previous_queries,
+    previous_answer,
+    search_text=None,
+):
     try:
         rewritten = web_query_rewriter_chain.invoke(
             {
@@ -92,7 +97,7 @@ def _rewrite_search_query(question, previous_queries, previous_answer):
     if rewritten and rewritten not in previous_queries:
         return rewritten
     return (
-        f"{_initial_search_query(question)} official semiconductor "
+        f"{_initial_search_query(search_text or question)} official semiconductor "
         "manufacturing update"
     )
 
@@ -192,6 +197,8 @@ def web_search(state):
     log.info("---开始联网检索---")
     question = state["question"]
     original_question = state.get("original_question", question)
+    # A context-wrapped question helps grading but must not reach the provider.
+    search_text = state.get("search_question") or question
     compact_relevance = bool(state.get("compact_relevance", False))
     max_results = state.get("web_search_max_results", WEB_SEARCH_MAX_RESULTS)
     search_engine = state.get("web_search_engine", WEB_SEARCH_ENGINE)
@@ -218,12 +225,13 @@ def web_search(state):
         question
         if compact_relevance
         else (
-            _initial_search_query(question)
+            _initial_search_query(search_text)
             if attempt_count == 0
             else _rewrite_search_query(
                 question,
                 queries,
                 state.get("generation", ""),
+                search_text,
             )
         )
     )
@@ -283,6 +291,7 @@ def web_search(state):
             question,
             queries,
             state.get("generation", ""),
+            search_text,
         )
 
     error = (

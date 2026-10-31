@@ -1868,7 +1868,7 @@ class EvidenceNodeTest(unittest.TestCase):
             any(
                 result.get("Web证据") == 1
                 and result.get("Web有效URL") == 1
-                and result.get("相关支持") == 1
+                and result.get("Web相关支持") == 1
                 for result in recorder.results
             )
         )
@@ -2206,6 +2206,107 @@ class EvidenceNodeTest(unittest.TestCase):
 
         self.assertEqual(len(result["missing_evidence_queries"]), 1)
         self.assertIn("power", result["missing_evidence_queries"][0])
+
+    def test_coverage_requires_support_for_the_same_candidate_and_criterion(self):
+        """A/power plus B/risk in one record must not cover A/risk or B/power."""
+        import src.workflows.nodes.selection_evidence as evidence_module
+
+        document = Document(
+            page_content="pair coverage: GAA lowers power; FinFET has low risk",
+            metadata={"id": "pair-coverage", "source": "knowledge.md"},
+        )
+        evidence_id = evidence_module._evidence_id(document)
+        fake_graph = MagicMock()
+        fake_graph.invoke.return_value = {
+            "documents": [document],
+            "retrieval_source": "local",
+            "retrieval_error": None,
+        }
+        assessment_chain = MagicMock()
+        assessment_chain.invoke.return_value = AIMessage(
+            content=json.dumps(
+                {
+                    "evidence_map": [
+                        {
+                            "evidence_id": evidence_id,
+                            "supports": [
+                                {
+                                    "candidate_id": "gaa",
+                                    "criterion": "power",
+                                    "level": "direct",
+                                    "quote": "GAA lowers power",
+                                },
+                                {
+                                    "candidate_id": "finfet",
+                                    "criterion": "risk",
+                                    "level": "direct",
+                                    "quote": "FinFET has low risk",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+        with patch.object(evidence_module, "retrieval_graph", fake_graph), patch.object(
+            evidence_module,
+            "evidence_assessment_chain",
+            assessment_chain,
+        ):
+            result = evidence_module.retrieve_evidence(
+                {
+                    "requirements": {
+                        "active_criteria": ["power", "risk"],
+                        "hard_constraints": [],
+                        "scenario_criteria": [],
+                    },
+                    "feasible_candidates": [
+                        {"candidate_id": "gaa", "name": "GAA"},
+                        {"candidate_id": "finfet", "name": "FinFET"},
+                    ],
+                    "evidence_tasks": [
+                        {
+                            "task_id": "pair-coverage",
+                            "candidate_ids": ["gaa", "finfet"],
+                            "query": "pair coverage power risk",
+                            "criteria": ["power", "risk"],
+                            "source_preference": "local",
+                        }
+                    ],
+                    "evidence_records": [],
+                }
+            )
+
+        self.assertFalse(result["evidence_sufficient"])
+        self.assertEqual(
+            result["evidence_gaps"],
+            [
+                "补充GAA在risk方面的可引用证据。",
+                "补充FinFET在power方面的可引用证据。",
+            ],
+        )
+
+    def test_supplement_tasks_reuse_candidate_entities_without_reanalysis(self):
+        from src.workflows.nodes.selection_evidence import optimize_evidence_queries
+
+        result = optimize_evidence_queries(
+            {
+                "requirements": {},
+                "feasible_candidates": [
+                    {"candidate_id": "gaa", "name": "GAA"},
+                    {"candidate_id": "finfet", "name": "FinFET"},
+                ],
+                "missing_evidence_queries": [
+                    "补充GAA在power方面的可引用证据。",
+                ],
+                "evidence_round": 1,
+            }
+        )
+
+        task = result["evidence_tasks"][0]
+        self.assertEqual(task["source_preference"], "local")
+        self.assertEqual(task["query_entities"], ["GAA"])
+        self.assertTrue(task["relation_intent"])
 
     def test_first_supplement_retries_verified_gaps_locally(self):
         import src.workflows.nodes.selection_evidence as evidence_module
@@ -3046,10 +3147,16 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertIn("## 3. 方案对比总表", report)
         self.assertIn("## 4. 关键指标分析", report)
         self.assertIn("薄膜均匀性与共形性", report)
-        self.assertIn("散热与热管理缺少直接证据", report)
+        self.assertIn(
+            "散热与热管理缺少直接证据",
+            [gap["description"] for gap in result["report_data"]["evidence_gaps"]],
+        )
         self.assertNotIn("None", report)
         self.assertIn("| 推断 |", report)
-        self.assertIn("来源未验证", report)
+        self.assertEqual(
+            result["report_data"]["evidence"][0]["source_label"],
+            "来源未验证",
+        )
 
     def test_report_includes_original_request_and_clarification_rounds(self):
         from src.workflows.nodes.selection_report import (
@@ -3383,7 +3490,9 @@ class DecisionNodeTest(unittest.TestCase):
             "warnings": ["证据需要人工复核。"],
         }
 
-        report = generate_report(state)["report"]
+        result = generate_report(state)
+        report = result["report"]
+        report_data = result["report_data"]
 
         self.assertLess(report.index("## 1. 执行摘要"), report.index("## 2. 需求与评估范围"))
         self.assertIn("| 指标 | 权重 | SiC | GaN | 当前判断 | 证据状态 |", report)
@@ -3391,10 +3500,24 @@ class DecisionNodeTest(unittest.TestCase):
         self.assertIn("耐压能力", report)
         self.assertNotIn("scenario_voltage", report)
         self.assertNotIn(r"D:\\Mydocs", report)
-        self.assertIn("[查看来源](https://example.com/gan)", report)
         self.assertIn("本次未纳入指标：功耗", report)
         self.assertNotIn("power：本次未纳入评估", report)
-        self.assertEqual(report.count("补充SiC在量产成熟度方面的可引用证据"), 1)
+        # 待验证事项、证据索引和审核说明只保留在结构化数据中，供界面面板展示。
+        self.assertIn("## 6. 风险与应对措施", report)
+        for section in ("## 7.", "## 8.", "## 9.", "待验证事项，详见", "审核结果："):
+            self.assertNotIn(section, report)
+        self.assertIn(
+            "https://example.com/gan",
+            [record["url"] for record in report_data["evidence"]],
+        )
+        self.assertEqual(
+            sum(
+                "补充SiC在量产成熟度方面的可引用证据" in gap["description"]
+                for gap in report_data["evidence_gaps"]
+            ),
+            1,
+        )
+        self.assertTrue(report_data["audit"]["review_label"])
 
     def test_generate_report_returns_compact_structured_report_data(self):
         from src.workflows.nodes.selection_report import generate_report
@@ -3872,6 +3995,86 @@ class DecisionNodeTest(unittest.TestCase):
             result["recommendation"]["decision_basis"],
             "insufficient_evidence",
         )
+
+    def test_recommendation_without_winner_skips_the_model(self):
+        import src.workflows.nodes.selection_decision as decision_module
+
+        chain = MagicMock()
+        with patch.object(decision_module, "recommendation_chain", chain):
+            result = decision_module.generate_recommendation(
+                {
+                    "requirements": {},
+                    "feasible_candidates": [
+                        {"candidate_id": "no-winner", "name": "No Winner"},
+                    ],
+                    "evaluations": [
+                        {
+                            "candidate_id": "no-winner",
+                            "weighted_score": None,
+                            "evidence_coverage": 0.4,
+                        }
+                    ],
+                    "risk_items": [],
+                    "evidence_gaps": [],
+                }
+            )
+
+        chain.invoke.assert_not_called()
+        self.assertEqual(
+            result["recommendation"]["decision"],
+            "insufficient_evidence",
+        )
+
+    def test_recommendation_model_only_supplies_prerequisites(self):
+        """Model output cannot change the candidate derived from scores."""
+        import src.workflows.nodes.selection_decision as decision_module
+
+        chain = MagicMock()
+        chain.invoke.return_value = AIMessage(
+            content="""{
+                "decision": "insufficient_evidence",
+                "recommended_candidate_id": "weaker",
+                "rationale": ["model rationale"],
+                "prerequisites": ["完成量产验证"]
+            }"""
+        )
+        with patch.object(decision_module, "recommendation_chain", chain):
+            result = decision_module.generate_recommendation(
+                {
+                    "requirements": {},
+                    "feasible_candidates": [
+                        {"candidate_id": "weaker", "name": "Weaker"},
+                        {"candidate_id": "stronger", "name": "Stronger"},
+                    ],
+                    "evaluations": [
+                        {
+                            "candidate_id": "weaker",
+                            "weighted_score": 2.0,
+                            "evidence_coverage": 1.0,
+                        },
+                        {
+                            "candidate_id": "stronger",
+                            "weighted_score": 4.0,
+                            "evidence_coverage": 1.0,
+                        },
+                    ],
+                    "risk_items": [
+                        {"candidate_id": "weaker", "category": "weaker-risk"},
+                        {"candidate_id": "stronger", "category": "stronger-risk"},
+                    ],
+                    "evidence_gaps": [],
+                }
+            )
+
+        recommendation = result["recommendation"]
+        self.assertEqual(recommendation["decision"], "recommend")
+        self.assertEqual(recommendation["recommended_candidate_id"], "stronger")
+        self.assertEqual(recommendation["alternative_candidate_ids"], ["weaker"])
+        self.assertEqual(recommendation["prerequisites"], ["完成量产验证"])
+        self.assertNotIn("model rationale", recommendation["rationale"])
+        model_inputs = chain.invoke.call_args.args[0]
+        self.assertIn("stronger-risk", model_inputs["risks"])
+        self.assertNotIn("weaker-risk", model_inputs["risks"])
 
     def test_malformed_recommendation_json_uses_evidence_score_fallback(self):
         """A transient model format error must not discard verified scoring."""

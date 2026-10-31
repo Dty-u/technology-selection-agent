@@ -8,6 +8,7 @@ class GraphState(TypedDict, total=False):
 
     question: str
     original_question: str
+    search_question: str
     transform_count: int
     generation: str
     documents: List[Document]

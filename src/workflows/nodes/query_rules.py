@@ -194,6 +194,11 @@ _FOLLOW_UP_LEAD_IN_PREFIXES = (
     "请问",
 )
 
+_SHORT_TERM_USER_TURN_PATTERN = re.compile(
+    r"^\[用户\] (.*?)(?=^\[(?:用户|助手|系统|工具|消息)\] |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
 _DIRECT_RESPONSE_TEMPLATES = {
     "identity": (
         "我是一个面向半导体知识问答和技术选型的 AI 助手。"
@@ -309,19 +314,49 @@ def _fallback_semiconductor_rag_classification(query, report_format):
     }
 
 
-def _is_semiconductor_pronoun_follow_up(query, short_term_context):
-    """Recognize a same-session follow-up whose referent is semiconductor."""
+def _starts_with_follow_up_reference(query):
+    """Return whether the text opens with a pronoun that needs a referent."""
     normalized_query = str(query or "").strip().lower()
-    normalized_context = str(short_term_context or "").strip().lower()
     for lead_in in _FOLLOW_UP_LEAD_IN_PREFIXES:
         if normalized_query.startswith(lead_in):
             normalized_query = normalized_query[len(lead_in) :].lstrip(" ，,")
             break
-    return bool(
-        normalized_context
-        and normalized_query.startswith(_FOLLOW_UP_REFERENCE_PREFIXES)
-        and any(term in normalized_context for term in _SEMICONDUCTOR_CONTEXT_TERMS)
-    )
+    return normalized_query.startswith(_FOLLOW_UP_REFERENCE_PREFIXES)
+
+
+def _latest_explicit_user_turn(short_term_context):
+    """Return the newest user turn that can establish a pronoun's referent.
+
+    Assistant turns are excluded because the boundary reply itself mentions
+    semiconductors, and pronoun or acknowledgement turns name no new subject.
+    """
+    turns = _SHORT_TERM_USER_TURN_PATTERN.findall(str(short_term_context or ""))
+    for turn in reversed(turns):
+        text = turn.strip()
+        if (
+            text
+            and not _starts_with_follow_up_reference(text)
+            and _fast_direct_response_kind(text) is None
+        ):
+            return text
+    return ""
+
+
+def _is_semiconductor_pronoun_follow_up(query, short_term_context):
+    """Recognize a same-session follow-up whose referent is semiconductor."""
+    if not _starts_with_follow_up_reference(query):
+        return False
+    referent_turn = _latest_explicit_user_turn(short_term_context).lower()
+    return any(term in referent_turn for term in _SEMICONDUCTOR_CONTEXT_TERMS)
+
+
+def _search_question_from_context(query, short_term_context):
+    """Build a search phrase without history or internal instructions."""
+    normalized_query = str(query or "").strip()
+    if not _starts_with_follow_up_reference(normalized_query):
+        return normalized_query
+    referent_turn = _latest_explicit_user_turn(short_term_context)
+    return f"{referent_turn} {normalized_query}".strip()
 
 
 def _short_term_follow_up_rag_classification(

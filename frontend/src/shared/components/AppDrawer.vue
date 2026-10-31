@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
 
-const props = defineProps<{ open: boolean; title: string; side?: 'left' | 'right' }>()
+const props = defineProps<{ open: boolean; title: string; side?: 'left' | 'right'; wide?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const closeButton = ref<HTMLButtonElement | null>(null)
 let previouslyFocused: HTMLElement | null = null
@@ -35,7 +35,7 @@ function onKeydown(event: KeyboardEvent) {
       <button class="drawer-backdrop" type="button" aria-label="关闭抽屉" @click="emit('close')" />
       <aside
         class="app-drawer"
-        :class="`app-drawer--${side ?? 'left'}`"
+        :class="[`app-drawer--${side ?? 'left'}`, { 'app-drawer--wide': wide }]"
         role="dialog"
         aria-modal="true"
         :aria-label="title"

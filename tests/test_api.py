@@ -929,12 +929,19 @@ class ApiContractTest(unittest.TestCase):
             set(openapi["paths"]),
             {
                 "/health/live",
+                "/api/v1/projects",
+                "/api/v1/projects/{project_id}",
                 "/api/v1/projects/{project_id}/sessions",
+                "/api/v1/projects/{project_id}/sessions/import",
+                "/api/v1/projects/{project_id}/sessions/stream",
                 "/api/v1/projects/{project_id}/sessions/{thread_id}/messages",
+                "/api/v1/projects/{project_id}/sessions/{thread_id}/messages/stream",
                 "/api/v1/projects/{project_id}/sessions/{thread_id}/cancel",
                 "/api/v1/projects/{project_id}/sessions/{thread_id}",
                 "/api/v1/projects/{project_id}/sessions/{thread_id}/report",
                 "/api/v1/projects/{project_id}/sessions/{thread_id}/reports/{report_id}",
+                "/api/v1/projects/{project_id}/sessions/{thread_id}/reports/{report_id}/content",
+                "/api/v1/reports",
             },
         )
 

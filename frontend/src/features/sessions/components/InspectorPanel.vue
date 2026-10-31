@@ -16,6 +16,7 @@ defineProps<{
   response: SessionResponse | null
   reportData: ReportData | null
   status: SessionUiStatus
+  sourceFocus?: { index: number; key: number } | null
 }>()
 const emit = defineEmits<{ download: [report?: ReportSummary] }>()
 </script>
@@ -24,7 +25,7 @@ const emit = defineEmits<{ download: [report?: ReportSummary] }>()
   <aside class="inspector-panel">
     <header class="inspector-header">
       <div>
-        <span class="eyebrow">WORKFLOW INSPECTOR</span>
+        <span class="eyebrow">运行详情</span>
         <h2>执行、证据与结论</h2>
       </div>
       <StatusBadge :status="status" />
@@ -57,12 +58,12 @@ const emit = defineEmits<{ download: [report?: ReportSummary] }>()
             <RequestNotice
               tone="warning"
               title="结构化报告不可用"
-              message="响应未满足 report_data V1 契约，已回退显示 Markdown 报告。"
+              message="报告数据格式不符合预期，已改为显示 Markdown 版本。"
             />
             <MarkdownContent :content="response.report || response.answer" />
           </section>
         </template>
-        <SourcesPanel v-else :sources="response.sources" />
+        <SourcesPanel v-else :sources="response.sources" :focus="sourceFocus" />
         <RequestNotice
           v-if="response.status === 'needs_human_review'"
           tone="warning"

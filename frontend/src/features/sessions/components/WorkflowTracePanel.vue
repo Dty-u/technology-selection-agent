@@ -55,14 +55,16 @@ function durationLabel(durationMs: number | null): string {
           </span>
           <div>
             <strong>{{ event.label }}</strong>
-            <small>{{ event.scope }} · {{ event.stage_id }}</small>
+            <small :title="event.stage_id">{{ event.scope }}</small>
           </div>
           <span class="workflow-event__meta">
             {{ durationLabel(event.duration_ms) || statusLabels[event.status] }}
           </span>
         </li>
       </ol>
-      <p v-else class="empty-copy">提交请求后，这里会显示后端实际执行的工作流阶段。</p>
+      <p v-else class="empty-copy">
+        {{ progress?.active ? '正在等待后端上报执行阶段…' : '此会话没有保留执行轨迹。' }}
+      </p>
     </div>
   </details>
 </template>

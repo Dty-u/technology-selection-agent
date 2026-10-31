@@ -1,6 +1,8 @@
 """Stable HTTP request and response models for the agent API."""
 
+from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -58,6 +60,26 @@ class ReportSummary(BaseModel):
     download_url: str
 
 
+class ReportLibraryItem(ReportSummary):
+    """One report in the user's library, with the session that produced it."""
+
+    project_id: str
+    thread_id: str
+    session_title: str
+
+
+class ReportListResponse(BaseModel):
+    reports: list[ReportLibraryItem] = Field(default_factory=list)
+
+
+class ReportContentResponse(BaseModel):
+    report_id: str
+    title: str
+    created_at: str
+    format: Literal["markdown", "docx"]
+    content: str
+
+
 class SessionResponse(BaseModel):
     """Frontend-safe view of one checkpointed agent session."""
 
@@ -89,6 +111,85 @@ class SessionResponse(BaseModel):
     report_url: str | None = None
     reports: list[ReportSummary] = Field(default_factory=list)
     progress: WorkflowProgress = Field(default_factory=WorkflowProgress)
+
+
+WorkflowStatus = Literal[
+    "running",
+    "completed",
+    "awaiting_user",
+    "needs_human_review",
+    "cancelled",
+    "error",
+]
+
+
+class ProjectRequest(BaseModel):
+    """Optional display name for a project registered under the current user."""
+
+    name: str | None = Field(default=None, max_length=255)
+
+
+class ProjectResponse(BaseModel):
+    project_id: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectResponse] = Field(default_factory=list)
+
+
+class SessionSummary(BaseModel):
+    thread_id: str
+    project_id: str
+    title: str
+    status: WorkflowStatus
+    created_at: str
+    updated_at: str
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary] = Field(default_factory=list)
+
+
+class StoredMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    delivery: Literal["pending", "sent", "cancelled", "failed"]
+    kind: Literal["message", "clarification"] = "message"
+    request_id: str
+    created_at: str
+
+
+class MessageListResponse(BaseModel):
+    messages: list[StoredMessage] = Field(default_factory=list)
+
+
+class ImportedMessage(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    role: Literal["user", "assistant", "system"]
+    content: str
+    delivery: Literal["sent", "cancelled"]
+    created_at: datetime
+    request_id: str | None = None
+
+
+class ImportSessionRequest(BaseModel):
+    """One session that older clients kept only in browser storage."""
+
+    thread_id: UUID
+    title: str = Field(min_length=1, max_length=255)
+    status: WorkflowStatus
+    created_at: datetime
+    updated_at: datetime
+    messages: list[ImportedMessage] = Field(default_factory=list, max_length=2000)
+
+
+class ImportSessionResponse(BaseModel):
+    thread_id: str
+    imported: bool
 
 
 class ErrorDetail(BaseModel):

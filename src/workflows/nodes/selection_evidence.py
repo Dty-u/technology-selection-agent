@@ -677,17 +677,18 @@ def retrieve_evidence(state):
             # not from free-form model suggestions.
             assessment_missing_queries = []
 
+            # Match scoring: a record supporting A/x and B/y does not cover A/y.
+            covered_pairs = {
+                (support["candidate_id"], support["criterion"])
+                for record in records
+                for support in record.get("supports", [])
+                if support.get("level") in {"direct", "indirect"}
+            }
             derived_missing_queries = []
             for candidate in feasible_candidates:
                 candidate_id = candidate["candidate_id"]
-                covered_criteria = {
-                    criterion
-                    for record in records
-                    if candidate_id in record["candidate_ids"]
-                    for criterion in record["criteria"]
-                }
                 for criterion in required_criterion_id_list:
-                    if criterion in covered_criteria:
+                    if (candidate_id, criterion) in covered_pairs:
                         continue
                     derived_missing_queries.append(
                         f"补充{candidate.get('name', candidate_id)}在"
@@ -722,7 +723,7 @@ def retrieve_evidence(state):
                     "新增证据": len(new_records),
                     "Web证据": len(web_records),
                     "Web有效URL": web_valid_url_count,
-                    "相关支持": web_relevant_support_count,
+                    "Web相关支持": web_relevant_support_count,
                     "评估批次": len(_assessment_batches(new_records)),
                     "失败批次": len(failed_batch_results) if batches else 0,
                     "缺口": len(missing_queries),
@@ -832,6 +833,13 @@ def optimize_evidence_queries(state):
             ),
             criteria=criteria,
             source_preference=source,
+            query_entities=[
+                candidate_names[candidate_id]
+                for candidate_id in candidate_ids
+                if candidate_names.get(candidate_id)
+            ],
+            relation_intent=f"比较候选技术在 {criterion_labels} 方面的影响关系",
+            relation_types=["AFFECTS", "IMPROVES", "REDUCES", "REQUIRES"],
         ).model_dump()
         tasks.append(task)
     return {"evidence_tasks": tasks}

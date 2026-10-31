@@ -17,6 +17,9 @@ from src.workflows.nodes.short_term_memory import (
     message_updates_with_trim,
 )
 
+# The last node of the router graph, with and without long-term memory wired in.
+_TERMINAL_NODES = ("persist_memory_candidates", "finalize_short_term_memory")
+
 
 class MemoryAwareRunner:
     """Enforce explicit scope IDs around a checkpoint-backed workflow."""
@@ -152,6 +155,15 @@ class MemoryAwareRunner:
     async def aget_state(self, config: dict[str, Any]):
         """Read checkpoint state through the graph's async saver contract."""
         return await self.graph.aget_state(config)
+
+    async def aupdate_state(self, config: dict[str, Any], values: dict[str, Any]):
+        """Write checkpoint state through the graph's async saver contract."""
+        # Writing as the terminal node schedules no further work; LangGraph cannot
+        # always infer a writer for a finished thread and rejects the update otherwise.
+        as_node = next(
+            node for node in _TERMINAL_NODES if node in self.graph.nodes
+        )
+        return await self.graph.aupdate_state(config, values, as_node=as_node)
 
     async def _record_clarification_questions_async(
         self,
@@ -310,17 +322,6 @@ class MemoryAwareRunner:
             config=config,
             scope=scope,
         )
-
-    async def aclose_session(self, thread_id: str, *, user_id: str) -> None:
-        """Delete one checkpoint thread through the async saver."""
-        normalized_thread_id = str(thread_id or "").strip()
-        if not normalized_thread_id:
-            raise ValueError("thread_id must not be empty")
-        if not str(user_id or "").strip():
-            raise ValueError("user_id must not be empty")
-        if self.checkpointer is None:
-            raise RuntimeError("this runner has no checkpoint saver")
-        await self.checkpointer.adelete_thread(normalized_thread_id)
         query_type = (
             result.get("query_type", "unknown")
             if isinstance(result, Mapping)
@@ -332,6 +333,17 @@ class MemoryAwareRunner:
             query_type,
             perf_counter() - started_at,
         )
+
+    async def aclose_session(self, thread_id: str, *, user_id: str) -> None:
+        """Delete one checkpoint thread through the async saver."""
+        normalized_thread_id = str(thread_id or "").strip()
+        if not normalized_thread_id:
+            raise ValueError("thread_id must not be empty")
+        if not str(user_id or "").strip():
+            raise ValueError("user_id must not be empty")
+        if self.checkpointer is None:
+            raise RuntimeError("this runner has no checkpoint saver")
+        await self.checkpointer.adelete_thread(normalized_thread_id)
 
     def close_session(self, thread_id: str, *, user_id: str) -> None:
         """Delete checkpoint state for one explicit thread."""

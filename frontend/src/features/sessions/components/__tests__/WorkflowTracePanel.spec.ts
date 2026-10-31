@@ -50,8 +50,25 @@ describe('WorkflowTracePanel', () => {
   it('does not invent stages when the backend has no events', () => {
     const wrapper = mount(WorkflowTracePanel)
 
-    expect(wrapper.text()).toContain('后端实际执行的工作流阶段')
+    expect(wrapper.text()).toContain('此会话没有保留执行轨迹')
     expect(wrapper.findAll('.workflow-event')).toHaveLength(0)
+  })
+
+  it('does not tell a finished session to submit a request first', () => {
+    const progress = {
+      request_id: null,
+      active: false,
+      cancel_requested: false,
+      cancelled: false,
+      current_stage: null,
+      events: [],
+    }
+    const finished = mount(WorkflowTracePanel, { props: { progress } })
+    const active = mount(WorkflowTracePanel, { props: { progress: { ...progress, active: true } } })
+
+    expect(finished.text()).toContain('此会话没有保留执行轨迹')
+    expect(finished.text()).not.toContain('提交请求后')
+    expect(active.text()).toContain('正在等待后端上报执行阶段')
   })
 
   it('toggles the execution trace from its heading while keeping the section data', async () => {
@@ -63,6 +80,6 @@ describe('WorkflowTracePanel', () => {
     await summary.trigger('click')
     expect((details.element as HTMLDetailsElement).open).toBe(false)
     expect(wrapper.text()).toContain('执行轨迹')
-    expect(wrapper.text()).toContain('后端实际执行的工作流阶段')
+    expect(wrapper.text()).toContain('此会话没有保留执行轨迹')
   })
 })

@@ -13,6 +13,7 @@ const labels: Record<SessionUiStatus, string> = {
   needs_human_review: '需要复核',
   cancelled: '已退出',
   error: '异常',
+  unknown: '状态未知',
 }
 </script>
 

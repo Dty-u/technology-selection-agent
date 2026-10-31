@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/shared/api/errors'
+import { controlledEventStream, sseFrame } from '@/tests/fixtures/sessionResponses'
 import { createSessionApi } from '../sessionApi'
 
 const responseBody = {
@@ -202,5 +203,96 @@ describe('sessionApi', () => {
     )
 
     expect(downloaded.filename).toBe('移动 SoC 技术选型.docx')
+  })
+
+  it('streams deltas split across chunks and resolves with the final event', async () => {
+    const stream = controlledEventStream()
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(stream.response)
+    const api = createSessionApi(
+      { apiBaseUrl: 'http://localhost:8000', userId: 'user-a', projectId: 'project-a' },
+      fetcher,
+    )
+    const deltas: string[] = []
+    const onReset = vi.fn<() => void>()
+
+    const pending = api.sendMessageStream(
+      responseBody.thread_id,
+      { message: '继续', report_format: 'markdown' },
+      '33333333-3333-4333-8333-333333333333',
+      { onReset, onDelta: (text) => deltas.push(text) },
+    )
+    const frames = [
+      ': keepalive\n\n',
+      sseFrame('reset', {}),
+      sseFrame('delta', { text: '鳍式' }).replace(/\n/g, '\r\n'),
+      sseFrame('delta', { text: '沟道' }),
+      sseFrame('final', responseBody),
+    ].join('')
+    const middle = Math.floor(frames.length / 2)
+    stream.push(frames.slice(0, middle))
+    stream.push(frames.slice(middle))
+    stream.close()
+
+    await expect(pending).resolves.toMatchObject({ answer: responseBody.answer })
+    expect(onReset).toHaveBeenCalledTimes(1)
+    expect(deltas.join('')).toBe('鳍式沟道')
+    const [url, init] = fetcher.mock.calls[0] ?? []
+    expect(url).toBe(
+      `http://localhost:8000/api/v1/projects/project-a/sessions/${responseBody.thread_id}/messages/stream`,
+    )
+    expect(new Headers(init?.headers).get('Accept')).toBe('text/event-stream')
+  })
+
+  it('turns an in-stream error event into a sanitized ApiError', async () => {
+    const stream = controlledEventStream()
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(stream.response)
+    const api = createSessionApi(
+      { apiBaseUrl: 'http://localhost:8000', userId: 'user-a', projectId: 'project-a' },
+      fetcher,
+    )
+
+    const pending = api.createSessionStream(
+      { message: 'What is FinFET?', report_format: 'markdown' },
+      '11111111-1111-4111-8111-111111111111',
+      responseBody.thread_id,
+      {},
+    )
+    stream.push(sseFrame('delta', { text: '部分' }))
+    stream.push(sseFrame('error', { code: 'service_unavailable', message: 'mysql down' }))
+    stream.close()
+
+    const error = await pending.catch((reason: unknown) => reason)
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({ status: 503, code: 'service_unavailable' })
+    expect((error as ApiError).message).not.toContain('mysql')
+  })
+
+  it('accepts a plain JSON reply and rejects a stream that ends without a final event', async () => {
+    const api = createSessionApi(
+      { apiBaseUrl: 'http://localhost:8000', userId: 'user-a', projectId: 'project-a' },
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(responseBody, 201)),
+    )
+    await expect(
+      api.createSessionStream(
+        { message: 'What is FinFET?', report_format: 'markdown' },
+        '11111111-1111-4111-8111-111111111111',
+        responseBody.thread_id,
+        {},
+      ),
+    ).resolves.toMatchObject({ answer: responseBody.answer })
+
+    const stream = controlledEventStream()
+    const truncated = createSessionApi(
+      { apiBaseUrl: 'http://localhost:8000', userId: 'user-a', projectId: 'project-a' },
+      vi.fn<typeof fetch>().mockResolvedValue(stream.response),
+    ).createSessionStream(
+      { message: 'What is FinFET?', report_format: 'markdown' },
+      '11111111-1111-4111-8111-111111111111',
+      responseBody.thread_id,
+      {},
+    )
+    stream.push(sseFrame('delta', { text: '半' }))
+    stream.close()
+    await expect(truncated).rejects.toMatchObject({ code: 'invalid_response' })
   })
 })

@@ -6,7 +6,7 @@ import logging
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.config.settings import MAX_EVIDENCE_ROUNDS, MAX_REVIEW_ROUNDS
-from src.infrastructure.llm.chat_model import selection_llm
+from src.infrastructure.llm.chat_model import selection_json_llm, selection_llm
 from src.workflows.nodes.selection_requirements import parse_json_object
 from src.workflows.nodes.selection_scoring import (
     _active_fixed_criteria,
@@ -111,19 +111,19 @@ recommendation_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """根据需求、候选评价和风险生成技术选型结论。允许 recommend、conditional、insufficient_evidence。
-理由必须分别说明综合分、high/highest 场景指标和首选方案的关键风险；不要把推断写成事实。
-上一轮审查反馈不为空时，必须逐项修正反馈指出的不一致。
-只返回JSON：{{"decision":"conditional","recommended_candidate_id":"id","alternative_candidate_ids":[],"rationale":[],"prerequisites":[],"unresolved_items":[]}}。""",
+            """首选方案已由评分规则确定，不要更改。根据需求、该方案的评价和风险，列出采用它之前必须满足的前提条件，最多5条。
+不要把推断写成事实。上一轮审查反馈不为空时，必须修正反馈中与前提条件有关的问题。
+只返回JSON：{{"prerequisites":[]}}。""",
         ),
         (
             "human",
-            "需求：{requirements}\n候选：{candidates}\n评价：{evaluations}\n风险：{risks}\n"
+            "需求：{requirements}\n首选方案：{candidate}\n结论类型：{decision}\n"
+            "评价：{evaluation}\n风险：{risks}\n"
             "证据缺口：{evidence_gaps}\n上一轮审查反馈：{review_feedback}",
         ),
     ]
 )
-recommendation_chain = recommendation_prompt | selection_llm
+recommendation_chain = recommendation_prompt | selection_json_llm
 
 
 review_prompt = ChatPromptTemplate.from_messages(
@@ -426,8 +426,56 @@ def analyze_risks(state):
     return result
 
 
+def _generate_prerequisites(recommendation, inputs):
+    """Ask the model for prerequisites of an already decided candidate."""
+    candidate_id = recommendation.recommended_candidate_id
+    response = recommendation_chain.invoke(
+        {
+            "requirements": json.dumps(
+                inputs["requirements"],
+                ensure_ascii=False,
+            ),
+            "candidate": json.dumps(
+                [
+                    candidate
+                    for candidate in inputs["feasible_candidates"]
+                    if candidate["candidate_id"] == candidate_id
+                ],
+                ensure_ascii=False,
+            ),
+            "decision": recommendation.decision,
+            "evaluation": json.dumps(
+                [
+                    evaluation
+                    for evaluation in inputs["evaluations"]
+                    if evaluation["candidate_id"] == candidate_id
+                ],
+                ensure_ascii=False,
+            ),
+            "risks": json.dumps(
+                [
+                    risk
+                    for risk in inputs["risk_items"]
+                    if risk.get("candidate_id") == candidate_id
+                ],
+                ensure_ascii=False,
+            ),
+            "evidence_gaps": inputs["evidence_gaps"],
+            "review_feedback": json.dumps(
+                inputs["review_feedback"],
+                ensure_ascii=False,
+            ),
+        }
+    )
+    payload = parse_json_object(_response_content(response))
+    return RecommendationResult(
+        decision=recommendation.decision,
+        prerequisites=payload.get("prerequisites", []),
+    ).prerequisites
+
+
 def generate_recommendation(state):
-    """Generate a conclusion while enforcing incomplete-evidence policy."""
+    """Derive the conclusion from scores and add model-written prerequisites."""
     cache_inputs = {
         "requirements": state.get("requirements", {}),
         "feasible_candidates": state.get("feasible_candidates", []),
@@ -444,66 +492,12 @@ def generate_recommendation(state):
     )
     if cached is not None:
         return cached
-    response = recommendation_chain.invoke(
-        {
-            "requirements": json.dumps(
-                cache_inputs["requirements"],
-                ensure_ascii=False,
-            ),
-            "candidates": json.dumps(
-                cache_inputs["feasible_candidates"],
-                ensure_ascii=False,
-            ),
-            "evaluations": json.dumps(
-                cache_inputs["evaluations"],
-                ensure_ascii=False,
-            ),
-            "risks": json.dumps(
-                cache_inputs["risk_items"],
-                ensure_ascii=False,
-            ),
-            "evidence_gaps": cache_inputs["evidence_gaps"],
-            "review_feedback": json.dumps(
-                cache_inputs["review_feedback"],
-                ensure_ascii=False,
-            ),
-        }
-    )
-    fallback_warning = ""
-    try:
-        recommendation = RecommendationResult.model_validate(
-            parse_json_object(_response_content(response))
-        )
-    except ValueError as exc:
-        # The model only supplies explanatory text here. The final candidate is
-        # derived below from assessed evidence, so malformed JSON must not
-        # discard a completed evidence and scoring workflow.
-        logger.warning(
-            "Recommendation JSON was invalid; using evidence-score fallback: %s",
-            type(exc).__name__,
-        )
-        recommendation = RecommendationResult(
-            decision="insufficient_evidence",
-        )
-        fallback_warning = (
-            "推荐结论模型返回格式异常，已根据已验证评分生成保守结论。"
-        )
     candidate_id_order = [
         candidate["candidate_id"]
         for candidate in state.get("feasible_candidates", [])
     ]
     candidate_ids = set(candidate_id_order)
-    if recommendation.recommended_candidate_id not in candidate_ids:
-        recommendation.recommended_candidate_id = None
-        recommendation.decision = "insufficient_evidence"
-    recommendation.alternative_candidate_ids = list(
-        dict.fromkeys(
-            candidate_id
-            for candidate_id in recommendation.alternative_candidate_ids
-            if candidate_id in candidate_ids
-            and candidate_id != recommendation.recommended_candidate_id
-        )
-    )
+    recommendation = RecommendationResult(decision="insufficient_evidence")
 
     evaluations = state.get("evaluations", [])
     requirements = SelectionRequirements.model_validate(
@@ -560,13 +554,28 @@ def generate_recommendation(state):
         recommendation.rationale = [
             "现有相关证据不足以形成首选候选。"
         ]
-        recommendation.prerequisites = []
+    fallback_warning = ""
     if recommendation.recommended_candidate_id:
         recommendation.alternative_candidate_ids = _ranked_alternative_ids(
             evaluations,
             candidate_id_order,
             recommendation.recommended_candidate_id,
         )
+        # The conclusion above is derived from scored evidence; the model only
+        # adds prerequisites, so malformed JSON must not discard the workflow.
+        try:
+            recommendation.prerequisites = _generate_prerequisites(
+                recommendation,
+                cache_inputs,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "Prerequisite JSON was invalid; continuing without them: %s",
+                type(exc).__name__,
+            )
+            fallback_warning = (
+                "推荐结论模型返回格式异常，已根据已验证评分生成保守结论。"
+            )
     # Verification gaps are derived from assessed evidence, not free-form model
     # prose. This prevents unrelated candidates or stale topics from leaking
     # into the final report.

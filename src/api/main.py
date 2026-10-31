@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.observability.logging import log
-from src.api.routes import router
+from src.api.routes import projects_router, reports_router, router
 from src.api.service import (
     SessionBusyError,
     SessionConflictError,
@@ -24,25 +24,39 @@ def create_app(
     application_factory: Callable[
         [], AbstractContextManager[Any] | AbstractAsyncContextManager[Any]
     ] | None = None,
+    session_repository_factory: Callable[[], Any] | None = None,
 ) -> FastAPI:
     """Build the API without opening external resources during import."""
     if application_factory is None:
+        from src.infrastructure.sessions.repository import MySQLSessionRepository
         from src.workflows.application import open_async_memory_application
 
         application_factory = open_async_memory_application
+        session_repository_factory = (
+            session_repository_factory or MySQLSessionRepository
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        session_repository = (
+            session_repository_factory() if session_repository_factory else None
+        )
         application_context = application_factory()
         if hasattr(application_context, "__aenter__"):
             async with application_context as runner:
                 app.state.runner = runner
-                app.state.session_service = SessionService(runner)
+                app.state.session_service = SessionService(
+                    runner,
+                    session_repository=session_repository,
+                )
                 yield
             return
         with application_context as runner:
             app.state.runner = runner
-            app.state.session_service = SessionService(runner)
+            app.state.session_service = SessionService(
+                runner,
+                session_repository=session_repository,
+            )
             yield
 
     app = FastAPI(
@@ -66,7 +80,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=[
             "Content-Type",
             "X-User-ID",
@@ -159,6 +173,8 @@ def create_app(
             },
         )
 
+    app.include_router(projects_router)
+    app.include_router(reports_router)
     app.include_router(router)
 
     return app

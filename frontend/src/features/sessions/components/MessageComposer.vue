@@ -32,6 +32,19 @@ watch(
 
 watch(message, (value) => emit('update:modelValue', value))
 
+const MAX_TEXTAREA_HEIGHT = 220
+
+function fitTextarea() {
+  const element = textarea.value
+  if (!element) return
+  element.style.height = 'auto'
+  const contentHeight = element.scrollHeight
+  element.style.height = `${Math.min(contentHeight, MAX_TEXTAREA_HEIGHT)}px`
+  element.style.overflowY = contentHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden'
+}
+
+watch(message, fitTextarea, { flush: 'post' })
+
 function submit() {
   const normalized = message.value.trim()
   if (!normalized) {
@@ -59,7 +72,7 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-defineExpose({ focus })
+defineExpose({ focus, wantsDocx })
 </script>
 
 <template>
@@ -73,7 +86,7 @@ defineExpose({ focus })
       :placeholder="
         awaitingUser ? '集中回答上方问题，按 Enter 继续…' : '描述你的问题或技术选型需求…'
       "
-      rows="3"
+      rows="1"
       @keydown="handleKeydown"
     />
     <div class="composer__footer">
